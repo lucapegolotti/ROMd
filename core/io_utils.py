@@ -47,7 +47,7 @@ def read_geo(fname):
     reader.Update()
     return reader
 
-def gather_pressures_velocities_areas(arrays):
+def gather_pressures_velocities(arrays):
     pressures   = {}
     velocities  = {}
     for array in arrays:

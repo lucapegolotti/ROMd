@@ -13,8 +13,8 @@ from data_container import DataContainer
 def main():
     model = 'data/3d_flow_repository/0111_0001.vtp'
     soln = io.read_geo(model).GetOutput()
-    soln_array, a, p_array = io.get_all_arrays(soln)
-    pressures, velocities = io.gather_pressures_velocities_areas(soln_array)
+    soln_array, _, p_array = io.get_all_arrays(soln)
+    pressures, velocities = io.gather_pressures_velocities(soln_array)
     geometry = Geometry(p_array)
     rgeo = ResampledGeometry(geometry, 10)
     stencil_size = 13

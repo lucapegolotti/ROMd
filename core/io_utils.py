@@ -1,13 +1,29 @@
 import os
 import vtk
+import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-def save_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var):
+def save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var):
     try:
         os.mkdir('training_data/')
     except OSError as error:
         print('training_data directory exists')
-    directory = 'training_data/' + var + 'st' + str(stencil_size) + 'c' + str(center) + '/'
+    directory = 'training_data/S_' + var + 'st' + str(stencil_size) + 'c' + str(center) + '/'
+    os.mkdir(directory)
+    np.save(directory + 'X.npy', X)
+    np.save(directory + 'Y.npy', Y)
+    np.save(directory + 'mins.npy', mins)
+    np.save(directory + 'maxs.npy', maxs)
+    np.save(directory + 'my.npy', my)
+    np.save(directory + 'My.npy', My)
+    model.save(directory)
+
+def save_junctions_data(X, Y, mins, maxs, my, My, model, stencil_size, njunctions, var):
+    try:
+        os.mkdir('training_data/')
+    except OSError as error:
+        print('training_data directory exists')
+    directory = 'training_data/J_' + var + 'st' + str(stencil_size) + 'nj' + str(njunctions) + '/'
     os.mkdir(directory)
     np.save(directory + 'X.npy', X)
     np.save(directory + 'Y.npy', Y)

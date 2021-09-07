@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 class Geometry:
     def __init__(self, points):
         self.points = points
+        self.inlet  = [0]
         self.find_characteristic_h()
-        self.inlet = [0]
         self.find_outlets()
         self.find_bifurcations()
         self.find_portions()
@@ -113,6 +113,8 @@ class Geometry:
             for outlet in self.outlets:
                 if outlet in self.portions[iportion]:
                     self.p_outlets.append(iportion)
+
+        self.connectivity = connectivity
 
     def plot(self, title = "", field = np.zeros((0))):
         fig = plt.figure()

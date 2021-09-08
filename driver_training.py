@@ -19,7 +19,7 @@ def main():
     # geometry.plot()
     rgeo = ResampledGeometry(geometry, 10)
     rgeo.plot()
-    rgeo.compare_field_along_centerlines(soln_array['area'])
+    rgeo.compare_field_along_centerlines(soln_array['velocity_0.28000'])
     stencil_size = 13
     data = DataContainer(rgeo, stencil_size, pressures, velocities, soln_array['area'])
     nn.train_and_save_all_networks(data, stencil_size)

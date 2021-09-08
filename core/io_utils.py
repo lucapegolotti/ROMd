@@ -19,12 +19,9 @@ def save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, 
     model.save(directory)
 
 def save_junctions_data(X, Y, mins, maxs, my, My, model, stencil_size, njunctions, var):
-    try:
-        os.mkdir('training_data/')
-    except OSError as error:
-        print('training_data directory exists')
     directory = 'training_data/J_' + var + 'st' + str(stencil_size) + 'nj' + str(njunctions) + '/'
-    os.mkdir(directory)
+    create_directory('training_data/')
+    create_directory(directory)
     np.save(directory + 'X.npy', X)
     np.save(directory + 'Y.npy', Y)
     np.save(directory + 'mins.npy', mins)
@@ -32,6 +29,12 @@ def save_junctions_data(X, Y, mins, maxs, my, My, model, stencil_size, njunction
     np.save(directory + 'my.npy', my)
     np.save(directory + 'My.npy', My)
     model.save(directory)
+
+def create_directory(fdr_name):
+    try:
+        os.mkidr(fdr_name)
+    except OSError as error:
+        print('Directory ' + fdr_name + ' exists')
 
 def collect_arrays(output):
     res = {}

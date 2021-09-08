@@ -10,7 +10,7 @@ import nn_utils as nn
 from geometry import Geometry
 from resampled_geometry import ResampledGeometry
 from data_container import DataContainer
-from stencil import *
+from assembler import Assembler
 
 def main():
     model = 'data/3d_flow_repository/0111_0001.vtp'
@@ -22,8 +22,7 @@ def main():
     rgeo.assign_area(soln_array['area'])
     stencil_size = 13
     tdata_directory = 'training_data'
-    stencils_array = StencilsArray(rgeo, stencil_size)
-    # assembler = Assembler(rgeo, stencil_size, tdata_directory)
+    stencils_array = Assembler(rgeo, stencil_size, tdata_directory)
 
 if __name__ == "__main__":
     main()

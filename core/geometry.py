@@ -30,7 +30,6 @@ class Geometry:
         # tolerance to determine if two points are neighbors
         self.tol = 3 * self.h
 
-
     def find_outlets(self):
         npoints = self.points.shape[0]
         outlets = []
@@ -148,30 +147,8 @@ class Geometry:
                            self.points[portion[0]:portion[1]+1,1],
                            self.points[portion[0]:portion[1]+1,2], s = 2,
                            c = values, vmin = fmin, vmax = fmax)
-
-        # class LineBuilder:
-        #     def __init__(self, points, portions):
-        #         self.count = 0
-        #         self.portions = portions
-        #         self.points = points
-
-        #     def __call__(self, event):
-        #         count = self.count
-        #         fig = plt.figure(1)
-        #         print(count)
-        #         ax.plot3D(self.points[self.portions[count][0]:self.portions[count][1]+1,0],
-        #               self.points[self.portions[count][0]:self.portions[count][1]+1,1],
-        #               self.points[self.portions[count][0]:self.portions[count][1]+1,2])
-        #         self.count = count + 1
-        #         plt.draw()
-
-        # builder = LineBuilder(self.points, self.portions)
-        # cid = fig.canvas.mpl_connect('key_press_event', builder)
-
-        # plt.show()
-
         # plot bifurcations
         ax.scatter3D(self.points[self.bifurcations,0],
-                      self.points[self.bifurcations,1],
-                      self.points[self.bifurcations,2], color = 'green')
+                     self.points[self.bifurcations,1],
+                     self.points[self.bifurcations,2], color = 'green')
         plt.title(title)

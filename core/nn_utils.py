@@ -23,7 +23,6 @@ def train_and_save_all_networks(dataset, max_stencil_size):
     half = int(np.floor((max_stencil_size - 1) / 2))
 
     njunctions = [j for j in dataset.junctions_datasets]
-
     for njun in njunctions:
         var = 'pressure'
         center = half

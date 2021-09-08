@@ -205,16 +205,16 @@ class DataContainer:
                     new_data = np.hstack((new_data,maxzs - minzs))
                     dataset_junction.append(new_data)
 
-        random.shuffle(dataset_junction)
-        if sc[ijun] in datasets:
-            datasets[sc[ijun]] = np.vstack((datasets[sc[ijun]], np.array(dataset_junction)))
-        else:
-            datasets[sc[ijun]] = np.array(dataset_junction)
+            random.shuffle(dataset_junction)
+            if sc[ijun] in datasets:
+                datasets[sc[ijun]] = np.vstack((datasets[sc[ijun]], np.array(dataset_junction)))
+            else:
+                datasets[sc[ijun]] = np.array(dataset_junction)
 
         for nbif in datasets:
             mins = []
             maxs = []
-
+    
             dataset = datasets[nbif]
             for j in range(0, dataset.shape[1]):
                 m = np.min(dataset[:,j])
@@ -225,7 +225,7 @@ class DataContainer:
                     dataset[:,j] = dataset[:,j] * 0
                 mins.append(m)
                 maxs.append(M)
-
+    
             self.junctions_datasets[int(nbif)] = dataset
             self.junctions_mins[int(nbif)]     = mins
             self.junctions_maxs[int(nbif)]     = maxs

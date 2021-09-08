@@ -1,4 +1,6 @@
 import numpy as np
+import tensorflow as tf
+from keras.models import Model
 
 class Stencil:
     def __init__(self, points, stsize, areas, center):
@@ -17,17 +19,19 @@ class Stencil:
         self.global_range_inlet = global_range_inlet
         self.global_ranges_outlets = global_ranges_outlets
 
-    def load_model(self):
+    def load_model(self, fdr, models):
         if self.type == 'sequential':
-            model_pressure = tf.keras.models.load_model('training_data/S_pressurest' +
-                                                        str(self.stsize) + 'c' + str(self.center))
-            model_velocity = tf.keras.models.load_model('training_data/S_velocityst' +
-                                                        str(self.stsize) + 'c' + str(self.center))
+            name_pressure = fdr + '/S_pressurest' + str(self.stsize) + 'c' + str(self.center)
+            name_velocity = fdr + '/S_velocityst' + str(self.stsize) + 'c' + str(self.center)
         if self.type == 'junction':
-            model_pressure = tf.keras.models.load_model('training_data/J_pressurest' +
-                                                        str(self.stsize) + 'nj' + str(self.njunctions))
-            model_velocity = tf.keras.models.load_model('training_data/J_velocityst' +
-                                                        str(self.stsize) + 'nj' + str(self.njunctions))
+            name_pressure = fdr + '/J_pressurest' + str(self.stsize) + 'nj' + str(self.njunctions)
+            name_velocity = fdr + '/J_velocityst' + str(self.stsize) + 'nj' + str(self.njunctions)
+        if name_pressure not in models:
+            models[name_pressure] = tf.keras.models.load_model(name_pressure)
+        if name_velocity not in models:
+            models[name_velocity] = tf.keras.models.load_model(name_velocity)
+        model_pressure = models[name_pressure]
+        model_velocity = models[name_velocity]
 
 class StencilsArray:
     def __init__(self, resampled_geometry, max_stencil_size):
@@ -117,8 +121,16 @@ class StencilsArray:
                     areas = resampled_geometry.areas[ipor][istart:iend]
 
                     stencils.append(Stencil(points,
-                                            iend - istart + 1,
+                                            iend - istart,
                                             areas,
                                             inode - istart))
                     stencils[-1].set_type_sequential(range(istart + offsets[ipor], iend + offsets[ipor]))
         self.stencils = stencils
+
+    def load_models(self, training_fdr):
+        models = {}
+        for stencil in self.stencils:
+            print('------')
+            print(stencil.center)
+            print(stencil.areas)
+            stencil.load_model(training_fdr, models)

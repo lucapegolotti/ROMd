@@ -9,6 +9,12 @@ class ResampledGeometry:
         self.resample(coeff)
         self.construct_interpolation_matrices()
 
+    def assign_area(self, area):
+        self.areas = []
+        nportions = len(self.p_portions)
+        for ipor in range(0, nportions):
+            self.areas.append(self.compute_proj_field(ipor, area))
+
     def resample(self, coeff):
         portions = self.geometry.portions
         self.p_portions = []

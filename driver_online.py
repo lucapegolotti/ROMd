@@ -6,9 +6,11 @@ sys.path.append("core/")
 import matplotlib.pyplot as plt
 import io_utils as io
 import nn_utils as nn
+# from assembler import Assembler
 from geometry import Geometry
 from resampled_geometry import ResampledGeometry
 from data_container import DataContainer
+from stencil import *
 
 def main():
     model = 'data/3d_flow_repository/0111_0001.vtp'
@@ -16,16 +18,12 @@ def main():
     soln_array, _, p_array = io.get_all_arrays(soln)
     pressures, velocities = io.gather_pressures_velocities(soln_array)
     geometry = Geometry(p_array)
-    # geometry.plot()
     rgeo = ResampledGeometry(geometry, 10)
-    rgeo.plot()
-    rgeo.compare_field_along_centerlines(soln_array['area'])
+    rgeo.assign_area(soln_array['area'])
     stencil_size = 13
-    data = DataContainer(rgeo, stencil_size, pressures, velocities, soln_array['area'])
-    nn.train_and_save_all_networks(data, stencil_size)
-    geometry.plot(field = soln_array['pressure_0.28000'])
-    rgeo.plot(field = soln_array['pressure_0.28000'])
-    plt.show()
+    tdata_directory = 'training_data'
+    stencils_array = StencilsArray(rgeo, stencil_size)
+    # assembler = Assembler(rgeo, stencil_size, tdata_directory)
 
 if __name__ == "__main__":
     main()

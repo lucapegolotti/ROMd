@@ -3,19 +3,17 @@ import vtk
 import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy as v2n
 
-def save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var):
-    try:
-        os.mkdir('training_data/')
-    except OSError as error:
-        print('training_data directory exists')
+def save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                         model, stencil_size, center, var):
     directory = 'training_data/S_' + var + 'st' + str(stencil_size) + 'c' + str(center) + '/'
-    os.mkdir(directory)
+    create_directory('training_data/')
+    create_directory(directory)
     np.save(directory + 'X.npy', X)
     np.save(directory + 'Y.npy', Y)
-    np.save(directory + 'mins.npy', mins)
-    np.save(directory + 'maxs.npy', maxs)
-    np.save(directory + 'my.npy', my)
-    np.save(directory + 'My.npy', My)
+    np.save(directory + 'mins_x.npy', mins)
+    np.save(directory + 'maxs_x.npy', maxs)
+    np.save('training_data/bounds_pressure.npy', np.array((min_pressure,max_pressure)))
+    np.save('training_data/bounds_velocity.npy', np.array((min_velocity,max_velocity)))
     model.save(directory)
 
 def save_junctions_data(X, Y, mins, maxs, my, My, model, stencil_size, njunctions, var):
@@ -24,34 +22,40 @@ def save_junctions_data(X, Y, mins, maxs, my, My, model, stencil_size, njunction
     create_directory(directory)
     np.save(directory + 'X.npy', X)
     np.save(directory + 'Y.npy', Y)
-    np.save(directory + 'mins.npy', mins)
-    np.save(directory + 'maxs.npy', maxs)
-    np.save(directory + 'my.npy', my)
-    np.save(directory + 'My.npy', My)
+    np.save(directory + 'mins_x.npy', mins)
+    np.save(directory + 'maxs_x.npy', maxs)
+    np.save(directory + 'mins_y.npy', my)
+    np.save(directory + 'maxs_y.npy', My)
     model.save(directory)
 
 def create_directory(fdr_name):
     try:
-        os.mkidr(fdr_name)
+        os.mkdir(fdr_name)
     except OSError as error:
         print('Directory ' + fdr_name + ' exists')
 
-def collect_arrays(output):
+def collect_arrays(output, components = None):
     res = {}
     for i in range(output.GetNumberOfArrays()):
         name = output.GetArrayName(i)
         data = output.GetArray(i)
-        res[name] = v2n(data)
+        if components == None:
+            res[name] = v2n(data)
+        else:
+            res[name] = v2n(data)[:components]
     return res
 
-def collect_points(output):
-    return v2n(output.GetData())
+def collect_points(output, components = None):
+    if components == None:
+        return v2n(output.GetData())
+    else:
+        return v2n(output.GetData())[:components]
 
-def get_all_arrays(geo):
+def get_all_arrays(geo, components = None):
     # collect all arrays
-    cell_data = collect_arrays(geo.GetCellData())
-    point_data = collect_arrays(geo.GetPointData())
-    points = collect_points(geo.GetPoints())
+    cell_data = collect_arrays(geo.GetCellData(), components)
+    point_data = collect_arrays(geo.GetPointData(), components)
+    points = collect_points(geo.GetPoints(), components)
     return point_data, cell_data, points
 
 def read_geo(fname):

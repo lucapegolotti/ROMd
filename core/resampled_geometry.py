@@ -174,3 +174,5 @@ class ResampledGeometry:
 
             r_field = self.compute_proj_field(ipor, field)
             ax.plot(np.array(x), r_field, 'r-o')
+            plt.xlabel('arclength [cm]')
+            plt.ylabel('flowrate [cm^3/s]')

@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import math
 from itertools import permutations
 
 class DataContainer:
@@ -7,6 +8,10 @@ class DataContainer:
         self.sequential_datasets = {}
         self.sequential_mins     = {}
         self.sequential_maxs     = {}
+        self.sequential_min_pressure = {}
+        self.sequential_max_pressure = {}
+        self.sequential_min_velocity = {}
+        self.sequential_max_velocity = {}
 
         for stencil_size in range(int(np.floor((max_stencil_size - 1) / 2)) + 1, max_stencil_size + 1):
             self.generate_sequential_dataset(resampled_geometry, stencil_size,
@@ -27,6 +32,23 @@ class DataContainer:
         dataset = []
         times = [ptime for ptime in pressures]
         times.sort()
+
+        min_pressure = math.inf
+        max_pressure = 0
+        for t in pressures:
+            mincp = np.min(pressures[t])
+            maxcp = np.max(pressures[t])
+            min_pressure = np.min((mincp, min_pressure))
+            max_pressure = np.max((maxcp, max_pressure))
+
+        min_velocity = math.inf
+        max_velocity = 0
+        for t in velocities:
+            mincv = np.min(velocities[t])
+            maxcv = np.max(velocities[t])
+            min_velocity = np.min((mincv, min_velocity))
+            max_velocity = np.max((maxcv, max_velocity))
+
         for ipor in range(0,len(resampled_geometry.p_portions)):
             area = resampled_geometry.compute_proj_field(ipor, areas)
             for itime in range(0, len(times) - 1):
@@ -36,13 +58,13 @@ class DataContainer:
                 p_velocity = resampled_geometry.compute_proj_field(ipor, velocities[times[itime]])
                 nnodes = pressure.size
 
-                for inode in range(0, nnodes - stencil_size):
+                for inode in range(0, nnodes - stencil_size + 1):
                     # current velocities and pressures
-                    ps = pressure[inode:inode + stencil_size]
-                    qs = velocity[inode:inode + stencil_size]
+                    ps = (pressure[inode:inode + stencil_size] - min_pressure) / (max_pressure - min_pressure)
+                    qs = (velocity[inode:inode + stencil_size] - min_velocity) / (max_velocity - min_velocity)
                     # previous velocities and pressures
-                    p_ps = p_pressure[inode:inode + stencil_size]
-                    p_qs = p_velocity[inode:inode + stencil_size]
+                    p_ps = (p_pressure[inode:inode + stencil_size] - min_pressure) / (max_pressure - min_pressure)
+                    p_qs = (p_velocity[inode:inode + stencil_size] - min_velocity) / (max_velocity - min_velocity)
                     ar   = area[inode:inode + stencil_size]
                     xs = resampled_geometry.p_portions[ipor][inode:inode + stencil_size,0]
                     ys = resampled_geometry.p_portions[ipor][inode:inode + stencil_size,1]
@@ -73,22 +95,34 @@ class DataContainer:
                     new_data = np.hstack((new_data,maxzs - minzs))
                     dataset.append(new_data)
 
-        random.shuffle(dataset)
+        # random.shuffle(dataset)
         dataset = np.array(dataset)
 
         mins = []
         maxs = []
 
         for j in range(0, dataset.shape[1]):
-            m = np.min(dataset[:,j])
-            M = np.max(dataset[:,j])
-            dataset[:,j] = (dataset[:,j] - m) / (M - m)
+            # in this case the pressures and velocities have already been scaled
+            if j < 4 * stencil_size:
+                m = 0
+                M = 1
+            else:
+                m = np.min(dataset[:,j])
+                M = np.max(dataset[:,j])
+                if M - m > 1e-15:
+                    dataset[:,j] = (dataset[:,j] - m) / (M - m)
+                else:
+                    dataset[:,j] = dataset[:,j] * 0
             mins.append(m)
             maxs.append(M)
 
-        self.sequential_datasets[stencil_size] = dataset
-        self.sequential_mins[stencil_size]     = mins
-        self.sequential_maxs[stencil_size]     = maxs
+        self.sequential_datasets[stencil_size]     = dataset
+        self.sequential_mins[stencil_size]         = mins
+        self.sequential_maxs[stencil_size]         = maxs
+        self.sequential_min_pressure[stencil_size] = min_pressure
+        self.sequential_max_pressure[stencil_size] = max_pressure
+        self.sequential_min_velocity[stencil_size] = min_velocity
+        self.sequential_max_velocity[stencil_size] = max_velocity
 
     def generate_junctions_dataset(self, resampled_geometry, stencil_size,
                                    pressures, velocities, areas):
@@ -176,36 +210,36 @@ class DataContainer:
 
                 for p in perm_out:
                     new_data = p_in
-                    for oind in p:
-                        new_data = np.hstack((new_data,p_out[oind]))
+                    for oint in p:
+                        new_data = np.hstack((new_data,p_out[oint]))
                     new_data = np.hstack((new_data,q_in))
                     for oint in p:
-                        new_data = np.hstack((new_data,q_out[oind]))
+                        new_data = np.hstack((new_data,q_out[oint]))
                     new_data = np.hstack((new_data,prev_p_in))
                     for oint in p:
-                        new_data = np.hstack((new_data,prev_p_out[oind]))
+                        new_data = np.hstack((new_data,prev_p_out[oint]))
                     new_data = np.hstack((new_data,prev_q_in))
                     for oint in p:
-                        new_data = np.hstack((new_data,prev_q_out[oind]))
+                        new_data = np.hstack((new_data,prev_q_out[oint]))
                     new_data = np.hstack((new_data,area_inlet))
                     for oint in p:
-                        new_data = np.hstack((new_data,area_outlets[oind,:]))
+                        new_data = np.hstack((new_data,area_outlets[oint,:]))
                     new_data = np.hstack((new_data,xs_inlet))
                     for oint in p:
-                        new_data = np.hstack((new_data,xs_outlets[oind,:]))
+                        new_data = np.hstack((new_data,xs_outlets[oint,:]))
                     new_data = np.hstack((new_data,ys_inlet))
                     for oint in p:
-                        new_data = np.hstack((new_data,ys_outlets[oind,:]))
+                        new_data = np.hstack((new_data,ys_outlets[oint,:]))
                     new_data = np.hstack((new_data,zs_inlet))
                     for oint in p:
-                        new_data = np.hstack((new_data,zs_outlets[oind,:]))
+                        new_data = np.hstack((new_data,zs_outlets[oint,:]))
                     new_data = np.hstack((new_data,times[itime + 1] - times[itime]))
                     new_data = np.hstack((new_data,maxxs - minxs))
                     new_data = np.hstack((new_data,maxys - minys))
                     new_data = np.hstack((new_data,maxzs - minzs))
                     dataset_junction.append(new_data)
 
-            random.shuffle(dataset_junction)
+            # random.shuffle(dataset_junction)
             if sc[ijun] in datasets:
                 datasets[sc[ijun]] = np.vstack((datasets[sc[ijun]], np.array(dataset_junction)))
             else:
@@ -214,7 +248,7 @@ class DataContainer:
         for nbif in datasets:
             mins = []
             maxs = []
-    
+
             dataset = datasets[nbif]
             for j in range(0, dataset.shape[1]):
                 m = np.min(dataset[:,j])
@@ -225,7 +259,7 @@ class DataContainer:
                     dataset[:,j] = dataset[:,j] * 0
                 mins.append(m)
                 maxs.append(M)
-    
+
             self.junctions_datasets[int(nbif)] = dataset
             self.junctions_mins[int(nbif)]     = mins
             self.junctions_maxs[int(nbif)]     = maxs
@@ -234,6 +268,10 @@ class DataContainer:
         X = np.copy(self.sequential_datasets[stsize])
         mins = np.copy(self.sequential_mins[stsize])
         maxs = np.copy(self.sequential_maxs[stsize])
+        min_pressure = self.sequential_min_pressure[stsize]
+        max_pressure = self.sequential_max_pressure[stsize]
+        min_velocity = self.sequential_min_velocity[stsize]
+        max_velocity = self.sequential_max_velocity[stsize]
 
         if var == 'pressure':
             offset = 0
@@ -241,14 +279,26 @@ class DataContainer:
             offset = stsize
 
         Y = X[:,offset + center]
-        my = X[offset + center]
-        My = X[offset + center]
+        my = mins[offset + center]
+        My = maxs[offset + center]
 
-        np.delete(X, offset + center, axis = 1)
-        np.delete(my, offset + center)
-        np.delete(My, offset + center)
+        # X = np.delete(X, offset + center, axis = 1)
+        # mins = np.delete(mins, offset + center)
+        # maxs = np.delete(maxs, offset + center)
 
-        return X, Y, mins, maxs, my, My
+        augment = 0
+        perc = 0.003
+
+        augX = X
+        augY = Y
+
+        for i in range(0, augment):
+            pert = 2 * np.random.rand(X.shape[0], X.shape[1]) * perc - perc
+            dX = np.multiply(X, pert)
+            augX = np.vstack((augX, X + dX))
+            augY = np.hstack((augY, Y))
+
+        return augX, augY, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity
 
     def get_junction_dataset(self, number_bifurcations, stencil_size, var):
         half = int(np.floor((stencil_size-1)/2))
@@ -262,11 +312,11 @@ class DataContainer:
             offset = number_bifurcations * half + 1
 
         Y = X[:,offset + half]
-        my = X[offset + half]
-        My = X[offset + half]
+        my = mins[offset + half]
+        My = maxs[offset + half]
 
-        np.delete(X, offset + half, axis = 1)
-        np.delete(my, offset + half)
-        np.delete(My, offset + half)
+        X = np.delete(X, offset + half, axis = 1)
+        mins = np.delete(mins, offset + half)
+        maxs = np.delete(maxs, offset + half)
 
         return X, Y, mins, maxs, my, My

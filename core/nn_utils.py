@@ -6,15 +6,19 @@ def train_network(X, Y):
     batchsize = 20
 
     model = tf.keras.models.Sequential()
-    model.add(tf.keras.layers.Dense(128, activation = 'relu'))
-    model.add(tf.keras.layers.Dense(64, activation = 'relu'))
+    # model.add(tf.keras.layers.Dense(256, activation = 'relu'))
+    # model.add(tf.keras.layers.Dense(128, activation = 'relu'))
+    # model.add(tf.keras.layers.Dense(128, activation = 'relu'))
+    # model.add(tf.keras.layers.Dense(1))
+    model.add(tf.keras.layers.Dense(128))
+    model.add(tf.keras.layers.Dense(64))
     model.add(tf.keras.layers.Dense(1))
 
     model.compile(optimizer = 'adam',
        loss = tf.keras.losses.MeanSquaredError(reduction = "auto", name = "mean_squared_error"),
        metrics = ['mae'])
 
-    model.fit(X, Y, epochs = 100, validation_split = 0.0, batch_size = batchsize)
+    model.fit(X, Y, epochs = 1000, validation_split = 0.0, batch_size = batchsize)
 
     return model
 
@@ -41,37 +45,43 @@ def train_and_save_all_networks(dataset, max_stencil_size):
         if stencil_size != max_stencil_size:
             var = 'pressure'
             center = half
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)
 
             var = 'pressure'
             center = stencil_size - half - 1
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)
 
             var = 'velocity'
             center = half
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)
 
             var = 'velocity'
             center = stencil_size - half - 1
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)
 
         else:
             var = 'pressure'
             center = half
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)
 
             var = 'velocity'
             center = half
-            X, Y, mins, maxs, my, My = dataset.get_sequential_dataset(stencil_size, center, var)
+            X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity = dataset.get_sequential_dataset(stencil_size, center, var)
             model = train_network(X, Y)
-            save_sequential_data(X, Y, mins, maxs, my, My, model, stencil_size, center, var)
+            save_sequential_data(X, Y, mins, maxs, min_pressure, max_pressure, min_velocity, max_velocity,
+                                 model, stencil_size, center, var)

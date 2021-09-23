@@ -44,6 +44,9 @@ soln_array, _, p_array = io.get_all_arrays(soln)
 pressures, velocities = io.gather_pressures_velocities(soln_array)
 geometry = Geometry(p_array)
 rgeo = ResampledGeometry(geometry, 20)
+
+#%%
+
 nodes, edges, lengths = rgeo.generate_nodes()
 # append zero lengths for autoloops
 for i in range(0, nodes.shape[0]):
@@ -87,7 +90,8 @@ gvelocities, mq, Mq = normalize_sequence(gvelocities)
 areas, ma, Ma = normalize(areas)
 
 for jnodes in range(nodes.shape[1]):
-    nodes[:,jnodes] = normalize(nodes[:,jnodes])
+    aa, m_, M_ = normalize(nodes[:,jnodes])
+    nodes[:,jnodes] = aa
 
 class AortaDataset(DGLDataset):
     def __init__(self, nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq):
@@ -257,7 +261,7 @@ for it in range(0, len(times) - 1):
     t = times[it]
     gp = gpressures[t]
     gq = gvelocities[t]
-    features = torch.from_numpy(np.hstack((gp,gq,areas)))
+    features = torch.from_numpy(np.hstack((gp,gq,areas, nodes)))
     pred = model(graph,features)
     
     # fig1 = plt.figure()
@@ -295,35 +299,37 @@ gp = gpressures[times[tin]]
 gq = gvelocities[times[tin]]
 for it in range(tin, len(times)-1):
     t = times[it]
-    features = torch.from_numpy(np.hstack((gp,gq,areas)))
+    features = torch.from_numpy(np.hstack((gp,gq,areas, nodes)))
     pred = model(graph,features)
     
     
     deltap = mdp + pred[:,0].detach().numpy() * (Mdp - mdp)
     predp = np.expand_dims(deltap, axis = 1) + mp + gp * (Mp - mp)
     truep =  mp + gpressures[times[it + 1]] * (Mp - mp)
-    # fig1 = plt.figure()
-    # ax1 = plt.axes()
-    # ax1.plot(predp / 1333.2,'r')
-    # ax1.plot(truep / 1333.2,'--b')
-    # ax1.set_title('pressure t = ' + str(t))
-    # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
-    # ax1.set_xlim((0, nodes.shape[0]))
+    fig1 = plt.figure()
+    ax1 = plt.axes()
+    ax1.plot(predp / 1333.2,'r')
+    ax1.plot(truep / 1333.2,'--b')
+    ax1.set_title('pressure t = ' + str(t))
+    ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
+    ax1.set_xlim((0, nodes.shape[0]))
     
-    fig2 = plt.figure()
-    ax2 = plt.axes()
     deltaq = mdq + pred[:,1].detach().numpy() * (Mdq - mdq)
     predq = np.expand_dims(deltaq, axis = 1) + mq + gq * (Mq - mq)
     trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
-    ax2.plot(predq,'r')
-    ax2.plot(trueq,'--b')
-    ax2.set_title('velocity t = ' + str(t))
-    # ax2.set_ylim((mq,Mq))
-    ax2.set_xlim((0, nodes.shape[0]))
+    # fig2 = plt.figure()
+    # ax2 = plt.axes()
+    # ax2.plot(predq,'r')
+    # ax2.plot(trueq,'--b')
+    # ax2.set_title('velocity t = ' + str(t))
+    # # ax2.set_ylim((mq,Mq))
+    # ax2.set_xlim((0, nodes.shape[0]))
     
-    # gp = gpressures[times[it+1]]
-    # gq = gvelocities[times[it+1]]
-    gp = (predp - mp) / (Mp - mp)
-    gq = (predq - mq) / (Mq - mq)
+    if it < 13:
+        gp = gpressures[times[it+1]]
+        gq = gvelocities[times[it+1]]
+    else:
+        gp = (predp - mp) / (Mp - mp)
+        gq = (predq - mq) / (Mq - mq)
     
 

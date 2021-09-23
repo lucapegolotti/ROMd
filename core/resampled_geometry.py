@@ -176,3 +176,80 @@ class ResampledGeometry:
             ax.plot(np.array(x), r_field, 'r-o')
             plt.xlabel('arclength [cm]')
             plt.ylabel('flowrate [cm^3/s]')
+
+    def generate_nodes(self):
+        nodes = np.zeros((0,3))
+        edges = np.zeros((0,2))
+
+
+        inlets = []
+        outlets = []
+        # we look for inlets and outlets
+        njuns = self.geometry.connectivity.shape[0]
+        for ijun in range(0, njuns):
+            inlets.append(np.where(self.geometry.connectivity[ijun,:] == -1)[0][0])
+            outlets.append(np.where(self.geometry.connectivity[ijun,:] == 1)[0])
+
+        offsets = [0]
+        nnpoints = []
+        isoutlets = []
+        for ipor in range(0, len(self.p_portions)):
+            isOutlet = False
+            for outlet in outlets:
+                if ipor in outlet:
+                    isOutlet = True
+            isoutlets.append(isOutlet)
+            if isOutlet:
+                nodes = np.vstack((nodes, self.p_portions[ipor][1:,:]))
+                npoints = self.p_portions[ipor].shape[0] - 1
+            else:
+                nodes = np.vstack((nodes, self.p_portions[ipor]))
+                npoints = self.p_portions[ipor].shape[0]
+
+            for i in range(0, npoints - 1):
+                edges = np.vstack((edges, np.array((i + offsets[ipor],
+                                                    i + offsets[ipor] + 1))))
+
+            nnpoints.append(npoints)
+            offsets.append(offsets[ipor] + npoints)
+
+        # add junctions to the edges
+        for ijun in range(0, njuns):
+            inlet = np.where(self.geometry.connectivity[ijun,:] == -1)[0][0]
+            outlets = np.where(self.geometry.connectivity[ijun,:] == 1)[0]
+            for ioutlet in range(0, outlets.size):
+                outlet = outlets[ioutlet]
+                edges = np.vstack((edges, np.array((offsets[inlet] + nnpoints[inlet] - 1,
+                                                   offsets[outlet]))))
+                
+        lengths = []
+        for edge in edges:
+            lengths.append(np.linalg.norm(nodes[int(edge[1]),:]-nodes[int(edge[0]),:]))
+
+        self.offsets = offsets
+        self.npoints = nnpoints
+        self.isoutlets = isoutlets
+        return nodes, edges, lengths
+
+    def generate_fields(self, pressures, velocities, areas):
+        g_pressures = {}
+        g_velocities = {}
+
+        def compute_g_field(field):
+            newfield = np.zeros((0,1))
+
+            for ipor in range(0, len(self.p_portions)):
+                f = self.compute_proj_field(ipor, field)
+
+                if self.isoutlets[ipor]:
+                    newfield = np.vstack((newfield, np.expand_dims(f[1:], axis = 1)))
+                else:
+                    newfield = np.vstack((newfield, np.expand_dims(f, axis = 1)))
+
+            return newfield
+
+        for t in pressures:
+            g_pressures[t] = compute_g_field(pressures[t])
+            g_velocities[t] = compute_g_field(velocities[t])
+
+        return g_pressures, g_velocities, compute_g_field(areas)

@@ -257,6 +257,7 @@ it = iter(train_dataloader)
 batch = next(it)
 batched_graph, labels = batch
 graph = dgl.unbatch(batched_graph)[0]
+count = 0
 for it in range(0, len(times) - 1):
     t = times[it]
     gp = gpressures[t]
@@ -264,17 +265,18 @@ for it in range(0, len(times) - 1):
     features = torch.from_numpy(np.hstack((gp,gq,areas, nodes)))
     pred = model(graph,features)
     
-    # fig1 = plt.figure()
-    # ax1 = plt.axes()
-    # deltap = mdp + pred[:,0].detach().numpy() * (Mdp - mdp)
-    # predp = deltap + mp + gpressures[t].squeeze() * (Mp - mp)
-    # truedeltap =  mdp + true[:,0].detach().numpy() * (Mdp - mdp)
-    # truep =  mp + gpressures[t] * (Mp - mp)
-    # ax1.plot(predp / 1333.2,'r')
-    # ax1.plot(truep / 1333.2,'--b')
-    # ax1.set_title('pressure t = ' + str(t))
-    # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
-    # ax1.set_xlim((0, nodes.shape[0]))
+    fig1 = plt.figure()
+    ax1 = plt.axes()
+    deltap = mdp + pred[:,0].detach().numpy() * (Mdp - mdp)
+    predp = deltap + mp + gpressures[t].squeeze() * (Mp - mp)
+    truep =  mp + gpressures[t] * (Mp - mp)
+    ax1.plot(predp / 1333.2,'r')
+    ax1.plot(truep / 1333.2,'--b')
+    ax1.set_title('pressure t = ' + str(t))
+    ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
+    ax1.set_xlim((0, nodes.shape[0]))
+    plt.savefig('pressure/t' + str(count).rjust(3, '0'))
+
     
     fig2 = plt.figure()
     ax2 = plt.axes()
@@ -283,9 +285,11 @@ for it in range(0, len(times) - 1):
     trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
     ax2.plot(predq,'r')
     ax2.plot(trueq,'--b')
-    ax2.set_title('velocity t = ' + str(t))
+    ax2.set_title('flowrate t = ' + str(t))
     ax2.set_ylim((mq,Mq))
     ax2.set_xlim((0, nodes.shape[0]))
+    plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
+    count = count + 1
     
 #%%
 
@@ -313,18 +317,20 @@ for it in range(tin, len(times)-1):
     ax1.set_title('pressure t = ' + str(t))
     ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
     ax1.set_xlim((0, nodes.shape[0]))
-    
+    plt.savefig('pressure/t' + str(count).rjust(3, '0'))
+
     deltaq = mdq + pred[:,1].detach().numpy() * (Mdq - mdq)
     predq = np.expand_dims(deltaq, axis = 1) + mq + gq * (Mq - mq)
     trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
-    # fig2 = plt.figure()
-    # ax2 = plt.axes()
-    # ax2.plot(predq,'r')
-    # ax2.plot(trueq,'--b')
-    # ax2.set_title('velocity t = ' + str(t))
-    # # ax2.set_ylim((mq,Mq))
-    # ax2.set_xlim((0, nodes.shape[0]))
-    
+    fig2 = plt.figure()
+    ax2 = plt.axes()
+    ax2.plot(predq,'r')
+    ax2.plot(trueq,'--b')
+    ax2.set_title('velocity t = ' + str(t))
+    ax2.set_ylim((mq,Mq))
+    ax2.set_xlim((0, nodes.shape[0]))
+    plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
+
     if it < 13:
         gp = gpressures[times[it+1]]
         gq = gvelocities[times[it+1]]

@@ -189,6 +189,8 @@ class ResampledGeometry:
         for ijun in range(0, njuns):
             inlets.append(np.where(self.geometry.connectivity[ijun,:] == -1)[0][0])
             outlets.append(np.where(self.geometry.connectivity[ijun,:] == 1)[0])
+            
+        outletp = outlets
 
         offsets = [0]
         nnpoints = []
@@ -229,7 +231,24 @@ class ResampledGeometry:
         self.offsets = offsets
         self.npoints = nnpoints
         self.isoutlets = isoutlets
-        return nodes, edges, lengths
+        
+        nportions = len(self.p_portions)
+        
+        inlet_node = 0
+        outlet_nodes = []
+        for i in range(0,nportions):
+            if i not in inlets:
+                outlet_nodes.append(self.offsets[i] + self.npoints[i] - 1)
+            
+            isinlet = True
+            for outlet in outletp:
+                if i in outlet:
+                    isinlet = False
+                    
+            if isinlet:
+                inlet_node = self.offsets[i]
+        
+        return nodes, edges, lengths, inlet_node, outlet_nodes
 
     def generate_fields(self, pressures, velocities, areas):
         g_pressures = {}

@@ -20,49 +20,33 @@ from dgl.data import DGLDataset
 from dgl.dataloading import GraphDataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 
-def main():
-    model = 'data/3d_flow_ini_1d_quad/0111_0001.vtp'
-    soln = io.read_geo(model).GetOutput()
-    soln_array, _, p_array = io.get_all_arrays(soln)
-    pressures, velocities = io.gather_pressures_velocities(soln_array)
-    geometry = Geometry(p_array)
-    # geometry.plot()
-    rgeo = ResampledGeometry(geometry, 5)
-    # # rgeo.plot()
-    rgeo.compare_field_along_centerlines(velocities[700])
-    # stencil_size = 5
-    # data = DataContainer(rgeo, stencil_size, pressures, velocities, soln_array['area'])
-    # nn.train_and_save_all_networks(data, stencil_size)
-    # geometry.plot(field = soln_array['velocity_0.01400'])
-    # rgeo.plot(field = soln_array['velocity_0.01400'])
-    plt.show()
 
 model = 'data/3d_flow_ini_1d_quad/0111_0001.vtp'
 model = 'data/3d_flow_repository(old)/0111_0001_recomputed.vtp'
 soln = io.read_geo(model).GetOutput()
-soln_array, _, p_array = io.get_all_arrays(soln, 180)
+soln_array, _, p_array = io.get_all_arrays(soln, 160)
+
 pressures, velocities = io.gather_pressures_velocities(soln_array)
 geometry = Geometry(p_array)
-rgeo = ResampledGeometry(geometry, 20)
+rgeo = ResampledGeometry(geometry, 1)
 
 #%%
 
 nodes, edges, lengths, inlet_node, outlet_nodes = rgeo.generate_nodes()
+
 # append zero lengths for autoloops
 for i in range(0, nodes.shape[0]):
     lengths.append(0)
 times = [t for t in pressures]
 times.sort()
+times.remove(0)
 gpressures, gvelocities, areas = rgeo.generate_fields(pressures, velocities, soln_array['area'])
 
 def compute_seq_diff(fields, times):
     diffs = {}
-
-    # for itime in range(1,len(times) - 1):
-    #     diffs[times[itime]] = (fields[times[itime + 1]] - fields[times[itime-1]]) / 2
     
-    for itime in range(1,len(times)):
-        diffs[times[itime]] = (fields[times[itime]] - fields[times[itime-1]])
+    for itime in range(0,len(times)-1):
+        diffs[times[itime]] = (fields[times[itime+1]] - fields[times[itime]])
         
     return diffs
 
@@ -93,14 +77,41 @@ gpressures, mp, Mp = normalize_sequence(gpressures)
 gvelocities, mq, Mq = normalize_sequence(gvelocities)
 areas, ma, Ma = normalize(areas)
 
-for jnodes in range(nodes.shape[1]):
-    aa, m_, M_ = normalize(nodes[:,jnodes])
-    nodes[:,jnodes] = aa
+g = dgl.graph((edges[:,0], edges[:,1]))
+g = dgl.to_bidirected(g)
+g = dgl.add_self_loop(g) 
+
+nnodes = nodes.shape[0]
+edge_features = []
+node_degree = []
+
+edg0 = g.edges()[0]
+edg1 = g.edges()[1]
+N = edg0.shape[0]
+for j in range(0, N):
+    diff = nodes[edg1[j],:] - nodes[edg0[j],:]
+    diff = np.hstack((diff, np.linalg.norm(diff)))
+    edge_features.append(diff)
     
+edge_features = np.array(edge_features)
+for j in range(3):
+    m = np.min(edge_features[:,j])
+    M = np.max(edge_features[:,j])
+    edge_features[:,j] = (edge_features[:,j] - m) / (M - m)
+    
+for j in range(0, nnodes):
+    node_degree.append(np.count_nonzero(edg0 == j) + np.count_nonzero(edg1 == j))
+    
+node_degree = np.array(node_degree)
+m = np.min(node_degree)
+M = np.max(node_degree)
+node_degree = (node_degree - m) / (M - m)
+node_degree = np.expand_dims(node_degree, axis = 1).astype(np.float32)
+
 #%%
 
 class AortaDataset(DGLDataset):
-    def __init__(self, nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq):
+    def __init__(self, nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree):
         self.nodes = nodes
         self.edges = edges
         self.lengths = lengths
@@ -110,6 +121,8 @@ class AortaDataset(DGLDataset):
         self.times = times
         self.diffp = diffp
         self.diffq = diffq
+        self.edge_features = edge_features
+        self.node_degree = node_degree
         super().__init__(name='aorta')
 
     def process(self):
@@ -119,6 +132,8 @@ class AortaDataset(DGLDataset):
         ntrain = int(nnodes * 0.6)
         nval = int(nnodes * 0.2)
         
+        edge_features = []
+        node_degree = []
         enrich = 3
         rate_noise = 0.01
         for itime in range(0, len(self.times) - 1):
@@ -129,19 +144,21 @@ class AortaDataset(DGLDataset):
                 # to depend on itself
                 g = dgl.to_bidirected(g)
                 g = dgl.add_self_loop(g)
-                bcsp = gpressures[times[itime]] * 0
-                bcsp[outlet_nodes] = gpressures[times[itime]][outlet_nodes]
-                bcsq = gvelocities[times[itime]] * 0
-                bcsq[inlet_node] = gpressures[times[itime]][inlet_node]
-                features = np.hstack((bcsp,bcsq))
-                features = np.hstack((features, gpressures[times[itime-1]]))
-                features = np.hstack((features, gvelocities[times[itime-1]]))
-                features = np.hstack((features, areas, self.nodes))
+                        
+                # bcsp = gpressures[times[itime]] * 0
+                # bcsp[outlet_nodes] = gpressures[times[itime + 1]][outlet_nodes]
+                # bcsq = gvelocities[times[itime]] * 0
+                # bcsq[inlet_node] = gpressures[times[itime + 1]][inlet_node]
+                features = np.hstack((gpressures[times[itime + 1]],gvelocities[times[itime+1]]))
+                features = np.hstack((features, gpressures[times[itime]], gvelocities[times[itime]]))
+                # features = np.hstack((features, gpressures[times[itime]]))
+                # features = np.hstack((features, gvelocities[times[itime]]))
+                features = np.hstack((features, areas, self.node_degree))
                 if i != 0:
                     noise = np.random.rand(features.shape[0], features.shape[1])*rate_noise - rate_noise/2
-                    featurs = features + noise
+                    features = features + noise.astype(np.float32)
                 g.ndata['features'] = torch.from_numpy(features)
-                # g.edata['length'] = torch.from_numpy(np.array(lengths))
+                g.edata['dist'] = torch.from_numpy(self.edge_features)
                 # label = gpressures[times[itime+1]]-gpressures[times[itime]]
                 # label = np.hstack((gpressures[times[itime]],
                 #                    gvelocities[times[itime]]))
@@ -170,7 +187,7 @@ class AortaDataset(DGLDataset):
     def __len__(self):
         return len(self.graphs)
 
-dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq)
+dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree)
 
 #%%
 
@@ -189,46 +206,125 @@ from torch.nn.modules.module import Module
 from dgl.nn import ChebConv
 from dgl.nn import GraphConv
 from dgl.nn import GATConv
+from dgl.nn import RelGraphConv
+from torch.nn import Linear
 import torch.nn.functional as F
+import dgllife
+import dgl.function as fn
 
-class GCN(Module):
-    def __init__(self, in_feats, h_feats):
-        super(GCN, self).__init__()
-        # lm = dgl.laplacian_lambda_max(g)
-        self.conv1 = ChebConv(in_feats, 2, 3, bias = False)
-        # self.conv1 = GATConv(h_feats, h_feats, num_heads = 1, feat_drop = 0.1)
-        # self.conv1 = GraphConv(in_feats, h_feats)
-        # self.conv2 = GraphConv(h_feats, 2)
-        # self.conv3 = GraphConv(h_feats, 2)
-        self.double()
-        self.lms = {}
+# class GCN(Module):
+#     def __init__(self, in_feats, h_feats):
+#         super(GCN, self).__init__()
+#         # lm = dgl.laplacian_lambda_max(g)
+#         # self.conv1 = ChebConv(in_feats, h_feats, 3, bias = False)
+#         # self.conv1 = GATConv(h_feats, h_feats, num_heads = 1, feat_drop = 0.1)
+#         self.num_heads = 2
+#         self.conv1 = GATConv(in_feats, h_feats, num_heads = self.num_heads, feat_drop = 0.5)
+#         self.conv2 = GATConv(h_feats, 2, num_heads = 1, feat_drop = 0.5)
+#         # self.conv3 = GraphConv(h_feats, 2)
+#         self.double()
+#         self.lms = {}
 
+#     def forward(self, g, in_feat):
+#         if g.num_nodes() not in self.lms:
+#             self.lms[g.num_nodes()] = dgl.laplacian_lambda_max(g)
+#         # h = self.conv1(g, in_feat, lambda_max = self.lms[g.num_nodes()])
+#         h = self.conv1(g, in_feat)
+#         h = torch.sum(h, dim = 1)
+#         h = h / self.num_heads
+#         h = F.relu(h)
+#         h = self.conv2(g, h)
+#         # h = F.relu(h)
+#         # h = self.conv3(g, h)
+#         # g.ndata['h'] = h
+#         return h
+        
+
+class GraphNet(Module):
+    def __init__(self, in_feats_nodes, in_feats_edges, latent, h_feats, L):
+        super(GraphNet, self).__init__()
+        self.encoder_nodes = Linear(in_feats_nodes, latent)
+        self.encoder_edges = Linear(in_feats_edges, latent)
+        self.processor_edges = []
+        self.processor_nodes = []
+        for i in range(L):      
+            self.processor_edges.append(Linear(latent * 3, latent))
+            self.processor_nodes.append(Linear(latent * 2, latent))
+        self.L = L
+        self.output = Linear(latent, h_feats)
+        
+    def encode_nodes(self, nodes):
+        f = nodes.data['features_c']
+        enc_features = self.encoder_nodes(f)
+        enc_features = F.relu(enc_features)
+        return {'proc_node': enc_features}
+    
+    def encode_edges(self, edges):
+        f = edges.data['dist']
+        enc_features = self.encoder_edges(f)
+        enc_features = F.relu(enc_features)
+        return {'proc_edge': enc_features}
+    
+    def process_edges(self, edges, layer):
+        f1 = edges.data['proc_edge']
+        f2 = edges.src['proc_node']
+        f3 = edges.dst['proc_node']
+        proc_edge = self.processor_edges[layer](torch.cat((f1, f2, f3),dim=1))
+        proc_edge = F.relu(proc_edge)
+        # add residual connection
+        proc_edge = proc_edge + f1
+        return {'proc_edge' : proc_edge}
+    
+    def process_nodes(self, nodes, layer):
+        f1 = nodes.data['proc_node']
+        f2 = nodes.data['pe_sum']
+        proc_node = self.processor_nodes[layer](torch.cat((f1, f2),dim=1))
+        proc_node = F.relu(proc_node)
+        # add residual connection
+        proc_node = proc_node + f1
+        return {'proc_node' : proc_node}
+    
+    def decode(self, nodes):
+        f = nodes.data['proc_node']
+        h = self.output(f)
+        return {'h' : h}
+    
     def forward(self, g, in_feat):
-        if g.num_nodes() not in self.lms:
-            self.lms[g.num_nodes()] = dgl.laplacian_lambda_max(g)
-        h = self.conv1(g, in_feat, lambda_max = self.lms[g.num_nodes()])
-        # h = self.conv1(g, in_feat)
-        # h = F.relu(h)
-        # h = self.conv2(g, h)
-        # h = F.relu(h)
-        # h = self.conv3(g, h)
-        # g.ndata['h'] = h
-        return h
+        g.ndata['features_c'] = in_feat
+        g.apply_nodes(self.encode_nodes)
+        g.apply_edges(self.encode_edges)
+        for i in range(self.L):
+            def pe(edges):
+                return self.process_edges(edges, i)
+            def pn(nodes):
+                return self.process_nodes(nodes, i)
+            g.apply_edges(pe)
+            # aggregate new edge features in nodes
+            g.update_all(fn.copy_e('proc_edge', 'm'), fn.sum('m', 'pe_sum'))
+            g.apply_nodes(pn)
+        g.apply_nodes(self.decode)
+        
+        # # averaging?
+        # for i in range(5):
+        #     g.update_all(fn.copy_u('h', 'm'), fn.mean('m', 'h'))
+        return g.ndata['h']
 
 # Create the model with given dimensions
-ls_size = 8
-infeat = 8
-model = GCN(infeat, ls_size)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-nepochs = 1000
+latent = 4
+infeat_nodes = 6
+infeat_edges = 4
+model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 10)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.001)
+nepochs = 100
 for epoch in range(nepochs):
+    print('ep = ' + str(epoch))
     for batched_graph, labels in train_dataloader:
-        pred = model(batched_graph, batched_graph.ndata['features'].double())
+        pred = model(batched_graph, batched_graph.ndata['features'])
         loss = F.mse_loss(pred, torch.reshape(labels, pred.shape))
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-    print('ep = ' + str(epoch) + ' loss = ' + str(loss.detach().numpy()))
+    print('\tloss = ' + str(loss.detach().numpy()))
 
 #%%
 
@@ -270,6 +366,7 @@ def find_solutions(model, graph, guess, prev, pnodes, qnodes, bcs_p, bcs_q):
         globalJ2 = torch.hstack((J[:,1,:,0], J[:,1,:,1]))
         globalJ = torch.vstack((globalJ1, globalJ2))
         # print(torch.linalg.cond(globalJ))
+        print(globalJ[:10,:10])
         R = torch.hstack((res[:,0],res[:,1])) # torch.reshape(res[:,0:2], (res.shape[0] * 2, 1))
         dx = torch.transpose(torch.reshape(torch.linalg.solve(globalJ, R), (2, res.shape[0])),0,1)
         # dx = torch.vstack((dx[:res.shape[0]],dx[res.shape[0]:]))
@@ -284,7 +381,6 @@ def find_solutions(model, graph, guess, prev, pnodes, qnodes, bcs_p, bcs_q):
         # for i in range(0,2):
         #     dx[:,i] = dx[:,i] + torch.linalg.solve(J[:,i,:,i], res[:,i])
         x[:,0:2] = x[:,0:2] - dx
-        print(x[:,1])
         res = residual(x)
         err = torch.norm(res)
         count = count + 1
@@ -341,60 +437,63 @@ it = iter(train_dataloader)
 batch = next(it)
 batched_graph, labels = batch
 graph = dgl.unbatch(batched_graph)[0]
+timeg = float(graph.ndata['time'][0])
+nodes_degree = np.expand_dims(graph.ndata['features'][:,-1],1)
     
-tin = 2
-gp = gpressures[times[tin]]
-gq = gvelocities[times[tin]]
+tin = 0
 count = 0
 for it in range(tin, len(times)-1):
     t = times[it]
-    tp = gpressures[times[it + 1]]
-    tq = gvelocities[times[it + 1]]
+    nt = times[it + 1]
+    gp = gpressures[t]
+    gq = gvelocities[t]
+    tp = gpressures[nt]
+    tq = gvelocities[nt]
     
-    bcs_p = torch.Tensor(np.squeeze(tp[outlet_nodes]).astype(np.float64)).double()
-    bcs_q = torch.Tensor(np.squeeze(tq[inlet_node]).astype(np.float64)).double()
+    bcs_p = torch.Tensor(np.squeeze(tp[outlet_nodes]).astype(np.float32))
+    bcs_q = torch.Tensor(np.squeeze(tq[inlet_node]).astype(np.float32))
     # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
-    bcsp = gp * 0
-    bcsp[outlet_nodes] = tp[outlet_nodes]
-    bcsq = gq * 0
-    bcsq[inlet_node] = tq[inlet_node]
     
     # prev = torch.from_numpy(np.hstack((gp, gq, gp, gq, areas, nodes)))
     # pred = find_solutions(model, graph, prev, prev)
-    
-    prev = torch.from_numpy(np.hstack((bcsp, bcsq, gp, gq, areas, nodes)))
+    prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, node_degree)))
+
+    # prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, nodes_degree)))
     pred = model(graph, prev)
-    
+    # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
+    pred = pred.squeeze()
     deltap = mdp + pred[:,0].detach().numpy() * (Mdp - mdp)
     predp = np.expand_dims(deltap, axis = 1) + mp + gp * (Mp - mp)
-    truep = mp + gpressures[times[it + 1]] * (Mp - mp)
+    truep = mp + gpressures[nt] * (Mp - mp)
     fig1 = plt.figure()
-    ax1 = plt.axes()
+    ax1 = plt.axes() 
     ax1.plot(predp / 1333.2,'r')
-    ax1.plot(truep / 1333.2,'--b')
+    ax1.plot(truep / 1333.2,'-b')
     ax1.set_title('pressure t = ' + str(t))
-    ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
+    # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
     ax1.set_xlim((0, nodes.shape[0]))
     plt.savefig('pressure/t' + str(count).rjust(3, '0'))
 
     deltaq = mdq + pred[:,1].detach().numpy() * (Mdq - mdq)
     predq = np.expand_dims(deltaq, axis = 1) + mq + gq * (Mq - mq)
-    trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
+    trueq = mq + gvelocities[nt] * (Mq - mq)
     fig2 = plt.figure()
     ax2 = plt.axes()
     ax2.plot(predq,'r')
     ax2.plot(trueq,'--b')
     ax2.set_title('velocity t = ' + str(t))
-    ax2.set_ylim((mq,Mq))
+    # ax2.set_ylim((mq,Mq))
     ax2.set_xlim((0, nodes.shape[0]))
     plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
-
+    plt.show()
     # if it < 13:
-    # gp = gpressures[times[it+1]]
-    # gq = gvelocities[times[it+1]]
+    gp = gpressures[times[it+1]]
+    gq = gvelocities[times[it+1]]
+    gp = tp
+    gq = tq
     # else:
-    gp = (predp - mp) / (Mp - mp)
-    gq = (predq - mq) / (Mq - mq)
+    # gp = (predp - mp) / (Mp - mp)
+    # gq = (predq - mq) / (Mq - mq)
     count = count + 1
     
 #%% when we predict the function
@@ -415,16 +514,17 @@ for it in range(tin, len(times)-1):
     prev = torch.from_numpy(np.hstack((gp, gq, gp, gq, areas, nodes)))
     # prev = torch.from_numpy(np.hstack((gpressures[times[it + 1]], gvelocities[times[it + 1]], gp, gq, areas, nodes)))
     
-    bcs_p = torch.Tensor(np.squeeze(tp[outlet_nodes]).astype(np.float64)).double()
-    bcs_q = torch.Tensor(np.squeeze(tq[inlet_node]).astype(np.float64)).double()
-    # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
+    bcs_p = torch.Tensor(np.squeeze(tp[outlet_nodes]).astype(np.float32))
+    bcs_q = torch.Tensor(np.squeeze(tq[inlet_node]).astype(np.float32))
+    
     bcsp = gp * 0
     bcsp[outlet_nodes] = tp[outlet_nodes]
     bcsq = gq * 0
     bcsq[inlet_node] = tq[inlet_node]
-    prev = torch.from_numpy(np.hstack((bcsp, bcsq, gp, gq, areas, nodes)))
-    pred = model(graph, prev)
-    
+    prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, node_degree)))
+    # pred = model(graph, prev)
+    pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
+
     predp = mp + pred[:,0].detach().numpy() * (Mp - mp)
     truep =  mp + gpressures[times[it + 1]] * (Mp - mp)
     fig1 = plt.figure()
@@ -450,11 +550,11 @@ for it in range(tin, len(times)-1):
     plt.show()
 
     # if it < 13:
-    # gp = gpressures[times[it+1]]
-    # gq = gvelocities[times[it+1]]
+    gp = gpressures[times[it+1]]
+    gq = gvelocities[times[it+1]]
     # else:
-    gp = np.expand_dims((predp - mp) / (Mp - mp),1)
-    gq = np.expand_dims((predq - mq) / (Mq - mq),1)
+    # gp = np.expand_dims((predp - mp) / (Mp - mp),1)
+    # gq = np.expand_dims((predq - mq) / (Mq - mq),1)
     print(gp.shape)
     count = count + 1
 

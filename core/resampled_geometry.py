@@ -248,7 +248,7 @@ class ResampledGeometry:
             if isinlet:
                 inlet_node = self.offsets[i]
         
-        return nodes, edges, lengths, inlet_node, outlet_nodes
+        return nodes.astype(np.float32), edges, lengths, inlet_node, outlet_nodes
 
     def generate_fields(self, pressures, velocities, areas):
         g_pressures = {}
@@ -265,7 +265,7 @@ class ResampledGeometry:
                 else:
                     newfield = np.vstack((newfield, np.expand_dims(f, axis = 1)))
 
-            return newfield
+            return newfield.astype(np.float32)
 
         for t in pressures:
             g_pressures[t] = compute_g_field(pressures[t])

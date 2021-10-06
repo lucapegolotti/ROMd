@@ -40,16 +40,16 @@ def collect_arrays(output, components = None):
         name = output.GetArrayName(i)
         data = output.GetArray(i)
         if components == None:
-            res[name] = v2n(data)
+            res[name] = v2n(data).astype(np.float32)
         else:
-            res[name] = v2n(data)[:components]
+            res[name] = v2n(data)[:components].astype(np.float32)
     return res
 
 def collect_points(output, components = None):
     if components == None:
-        return v2n(output.GetData())
+        return v2n(output.GetData()).astype(np.float32)
     else:
-        return v2n(output.GetData())[:components]
+        return v2n(output.GetData())[:components].astype(np.float32)
 
 def get_all_arrays(geo, components = None):
     # collect all arrays

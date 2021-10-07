@@ -150,7 +150,7 @@ class ResampledGeometry:
 
     def compare_field_along_centerlines(self, field):
         nportions = len(self.p_portions)
-
+        
         for ipor in range(0, nportions):
             # plot original one
             fig = plt.figure(ipor)
@@ -165,7 +165,14 @@ class ResampledGeometry:
                 x.append(np.linalg.norm(points[ip,:] - points[ip-1,:]) + x[ip-1])
 
             ax.plot(np.array(x), field[iin:iend+1], 'k--o')
-
+            if ipor == 0:
+                gf = field[iin:iend+1]
+            else:
+                gf = np.hstack((gf, field[iin:iend+1]))
+            if ipor == 0:
+                xsf = np.array(x)
+            else:
+                xsf = np.hstack((xsf, np.array(x) + xsf[-1]))
             x = [0]
             points = self.p_portions[ipor]
 
@@ -175,7 +182,21 @@ class ResampledGeometry:
             r_field = self.compute_proj_field(ipor, field)
             ax.plot(np.array(x), r_field, 'r-o')
             plt.xlabel('arclength [cm]')
-            plt.ylabel('flowrate [cm^3/s]')
+            if ipor == 0:
+                gp = r_field
+            else:
+                gp = np.hstack((gp, r_field))
+            if ipor == 0:
+                xsp = np.array(x)
+            else:
+                xsp = np.hstack((xsp, np.array(x) + xsp[-1]))
+            # plt.ylabel('flowrate [cm^3/s]')
+        fig = plt.figure(100)
+        ax = plt.axes()
+        ax.plot(xsf, gf, 'k--')
+        ax.plot(xsp, gp, 'r-')
+        
+        
 
     def generate_nodes(self):
         nodes = np.zeros((0,3))
@@ -248,7 +269,7 @@ class ResampledGeometry:
             if isinlet:
                 inlet_node = self.offsets[i]
         
-        return nodes.astype(np.float32), edges, lengths, inlet_node, outlet_nodes
+        return nodes.astype(np.float64), edges, lengths, inlet_node, outlet_nodes
 
     def generate_fields(self, pressures, velocities, areas):
         g_pressures = {}
@@ -265,7 +286,7 @@ class ResampledGeometry:
                 else:
                     newfield = np.vstack((newfield, np.expand_dims(f, axis = 1)))
 
-            return newfield.astype(np.float32)
+            return newfield.astype(np.float64)
 
         for t in pressures:
             g_pressures[t] = compute_g_field(pressures[t])

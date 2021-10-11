@@ -20,6 +20,7 @@ from dgl.data import DGLDataset
 from dgl.dataloading import GraphDataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 model = 'data/3d_flow_ini_1d_quad/0111_0001.vtp'
 model = 'data/3d_flow_repository(old)/0111_0001_recomputed.vtp'
@@ -180,43 +181,59 @@ class AortaDataset(DGLDataset):
         for itime in range(0, len(self.times) - 1):
             
             for i in range(enrich):
-                g = dgl.graph((self.edges[:,0], self.edges[:,1]))
+                if device.type == 'cpu':
+                    g = dgl.graph((self.edges[:,0], self.edges[:,1]))
+                else:
+                    e1 = torch.from_numpy(self.edges[:,0])
+                    e2 = torch.from_numpy(self.edges[:,1])
+                    e1, e2 = e1.to(device), e2.to(device)
+                    g = dgl.graph((e1, e2))
                 # we add a self loop because we want the prediction in each node
                 # to depend on itself
                 g = dgl.to_bidirected(g)
                 # g = dgl.add_self_loop(g)
                         
-                features = np.hstack((gpressures[times[itime]], gvelocities[times[itime]]))
-                features[inlet_node,1] = gvelocities[times[itime + 1]][inlet_node].squeeze()
-                features[outlet_nodes,0] = gpressures[times[itime + 1]][outlet_nodes].squeeze()
+                features = np.hstack((gpressures[self.times[itime]], gvelocities[self.times[itime]]))
+                features[inlet_node,1] = gvelocities[self.times[itime + 1]][inlet_node].squeeze()
+                features[outlet_nodes,0] = gpressures[self.times[itime + 1]][outlet_nodes].squeeze()
                 noise = 0
                 features = np.hstack((features, areas, self.node_degree))
                 # if i != 0:
                 noise = np.random.normal(0, rate_noise, (features.shape[0], 2)) * np.abs(features[:,:2])
                 features[:,:2] = noise.astype(np.float64) + features[:,:2]
-                g.ndata['features'] = torch.from_numpy(features)
-                g.edata['dist'] = torch.from_numpy(self.edge_features)
-                label = self.diffp[times[itime]]
-                label = np.hstack((label, self.diffq[times[itime]]))
+                features = torch.from_numpy(features)
+                if device.type != 'cpu':
+                    features = features.to(device)
+                g.ndata['features'] = features
+                dist = torch.from_numpy(self.edge_features)
+                if device.type != 'cpu':
+                    dist = dist.to(device)
+                g.edata['dist'] = dist
+                label = self.diffp[self.times[itime]]
+                label = np.hstack((label, self.diffq[self.times[itime]]))
                 label = label - noise
+                label = torch.from_numpy(label)
                 # label[inlet_node,1] = 0
                 # label[outlet_nodes,0] = 0
+                if device.type != 'cpu':
+                    label = label.to(device)
                 self.labels.append(label)
-                if (np.max(np.abs(label[:,0])) > 10):
-                    print('----')
-                    print(times[itime])
-                    print(np.max(np.abs(label[:,0])))
-                g.ndata['labels'] = torch.from_numpy(label)
-                g.ndata['time'] = torch.from_numpy(np.ones(features.shape[0]) * times[itime])
-                train_mask = torch.zeros(nnodes, dtype=torch.bool)
-                val_mask = torch.zeros(nnodes, dtype=torch.bool)
-                test_mask = torch.zeros(nnodes, dtype=torch.bool)
-                train_mask[:ntrain] = True
-                val_mask[ntrain:ntrain + nval] = True
-                test_mask[ntrain + nval:] = True
-                g.ndata['train_mask'] = train_mask
-                g.ndata['val_mask'] = val_mask
-                g.ndata['test_mask'] = test_mask
+                
+                g.ndata['labels'] = label
+                
+                times =  torch.from_numpy(np.ones(features.shape[0]) * self.times[itime])
+                if device.type != 'cpu':
+                    times = times.to(device)
+                g.ndata['time'] = times
+                # train_mask = torch.zeros(nnodes, dtype=torch.bool)
+                # val_mask = torch.zeros(nnodes, dtype=torch.bool)
+                # test_mask = torch.zeros(nnodes, dtype=torch.bool)
+                # train_mask[:ntrain] = True
+                # val_mask[ntrain:ntrain + nval] = True
+                # test_mask[ntrain + nval:] = True
+                # g.ndata['train_mask'] = train_mask
+                # g.ndata['val_mask'] = val_mask
+                # g.ndata['test_mask'] = test_mask
                 self.graphs.append(g)
 
     def __getitem__(self, i):
@@ -249,34 +266,6 @@ from torch.nn import Linear
 import torch.nn.functional as F
 import dgllife
 import dgl.function as fn
-
-# class GCN(Module):
-#     def __init__(self, in_feats, h_feats):
-#         super(GCN, self).__init__()
-#         # lm = dgl.laplacian_lambda_max(g)
-#         # self.conv1 = ChebConv(in_feats, h_feats, 3, bias = False)
-#         # self.conv1 = GATConv(h_feats, h_feats, num_heads = 1, feat_drop = 0.1)
-#         self.num_heads = 2
-#         self.conv1 = GATConv(in_feats, h_feats, num_heads = self.num_heads, feat_drop = 0.5)
-#         self.conv2 = GATConv(h_feats, 2, num_heads = 1, feat_drop = 0.5)
-#         # self.conv3 = GraphConv(h_feats, 2)
-#         self.double()
-#         self.lms = {}
-
-#     def forward(self, g, in_feat):
-#         if g.num_nodes() not in self.lms:
-#             self.lms[g.num_nodes()] = dgl.laplacian_lambda_max(g)
-#         # h = self.conv1(g, in_feat, lambda_max = self.lms[g.num_nodes()])
-#         h = self.conv1(g, in_feat)
-#         h = torch.sum(h, dim = 1)
-#         h = h / self.num_heads
-#         h = F.relu(h)
-#         h = self.conv2(g, h)
-#         # h = F.relu(h)
-#         # h = self.conv3(g, h)
-#         # g.ndata['h'] = h
-#         return h
-        
 
 class GraphNet(Module):
     def __init__(self, in_feats_nodes, in_feats_edges, latent, h_feats, L, inlet_node, outlet_nodes):
@@ -356,10 +345,10 @@ def weighted_mse_loss(input, target, weight):
     return (weight * (input - target) ** 2).mean()
 
 # Create the model with given dimensions
-latent = 16
+latent = 8
 infeat_nodes = 4
 infeat_edges = 4
-model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 10, inlet_node, outlet_nodes)
+model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 5, inlet_node, outlet_nodes)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.001)
 nepochs = 1000
 for epoch in range(nepochs):

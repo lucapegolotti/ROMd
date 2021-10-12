@@ -16,28 +16,25 @@ from data_container import DataContainer
 import dgl
 import numpy as np
 import torch
-from dgl.data import DGLDataset
+from dgl.data import DGLDataset 
 from dgl.dataloading import GraphDataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 
 
 model = 'data/3d_flow_ini_1d_quad/0111_0001.vtp'
 model = 'data/3d_flow_repository(old)/0111_0001_recomputed.vtp'
-model = 'data/output_no_sphere.vtp'
+# model = 'data/output_no_sphere.vtp'
 soln = io.read_geo(model).GetOutput()
 soln_array, _, p_array = io.get_all_arrays(soln)
 
 pressures, velocities = io.gather_pressures_velocities(soln_array)
 geometry = Geometry(p_array)
-rgeo = ResampledGeometry(geometry, 10)
+rgeo = ResampledGeometry(geometry, 20)
 
 #%%
 
 nodes, edges, lengths, inlet_node, outlet_nodes = rgeo.generate_nodes()
 
-# append zero lengths for autoloops
-for i in range(0, nodes.shape[0]):
-    lengths.append(0)
 times = [t for t in pressures]
 times.sort()
 times = times[10:]
@@ -65,9 +62,6 @@ def normalize_sequence(fields):
         
     for t in fields:
         fields[t] = (fields[t] - m) / (M - m)
-        print('---')
-        print(times[itime])
-        print(np.max(np.abs(fields[times[itime]])))
         
     return fields, m, M
 
@@ -90,15 +84,31 @@ def standardize_sequence(fields):
         
     return fields, m, stdv
 
-diffp = compute_seq_diff(gpressures, times)
-diffp, mdp, stdvdp = standardize_sequence(diffp)
 
-diffq = compute_seq_diff(gvelocities, times)
-diffq, mdq, stdvdq = standardize_sequence(diffq)
+_normalize = False
 
-gpressures, mp, stdp = standardize_sequence(gpressures)
-gvelocities, mq, stdq = standardize_sequence(gvelocities)
-areas, ma, stda = standardize(areas)
+if _normalize:
+    diffp = compute_seq_diff(gpressures, times)
+    diffp, mdp, Mdp = normalize_sequence(diffp)
+    
+    diffq = compute_seq_diff(gvelocities, times)
+    diffq, mdq, Mdq = normalize_sequence(diffq)
+    
+    gpressures, mp, Mp = normalize_sequence(gpressures)
+    gvelocities, mq, Mq = normalize_sequence(gvelocities)
+    areas, ma, stda = normalize(areas)
+    
+else:
+    diffp = compute_seq_diff(gpressures, times)
+    diffp, mdp, stdvdp = standardize_sequence(diffp)
+    
+    diffq = compute_seq_diff(gvelocities, times)
+    diffq, mdq, stdvdq = standardize_sequence(diffq)
+    
+    gpressures, mp, stdp = standardize_sequence(gpressures)
+    gvelocities, mq, stdq = standardize_sequence(gvelocities)
+    areas, ma, stda = standardize(areas)
+    
 
 g = dgl.graph((edges[:,0], edges[:,1]))
 g = dgl.to_bidirected(g)
@@ -149,6 +159,20 @@ one_hot_degrees[outlet_nodes] = 1
 # node_degree = (node_degree - m) / (M - m)
 node_degree = np.expand_dims(node_degree, axis = 1).astype(np.float32)
 
+fig1 = plt.figure()
+ax1 = plt.axes(projection='3d') 
+
+for i in range(edges.shape[0]):
+    e1 = nodes[int(edges[i,0]),:]
+    e2 = nodes[int(edges[i,1]),:]
+    ax1.plot3D([e1[0],e2[0]], [e1[1],e2[1]], [e1[2],e2[2]], '-r')
+    
+for i in range(node_degree.size):
+    if node_degree[i] > 4:
+        ax1.scatter3D(nodes[i,0],nodes[i,1],nodes[i,2],c = 'black')
+    
+plt.show()
+
 #%%
 
 class AortaDataset(DGLDataset):
@@ -190,15 +214,16 @@ class AortaDataset(DGLDataset):
                 features[inlet_node,1] = gvelocities[times[itime + 1]][inlet_node].squeeze()
                 features[outlet_nodes,0] = gpressures[times[itime + 1]][outlet_nodes].squeeze()
                 noise = 0
-                features = np.hstack((features, areas, self.node_degree))
+                features = np.hstack((features, self.areas, self.node_degree))
                 # if i != 0:
                 noise = np.random.normal(0, rate_noise, (features.shape[0], 2)) * np.abs(features[:,:2])
-                features[:,:2] = noise.astype(np.float64) + features[:,:2]
+                # features[:,:2] = noise.astype(np.float64) + features[:,:2]
                 g.ndata['features'] = torch.from_numpy(features)
                 g.edata['dist'] = torch.from_numpy(self.edge_features)
                 label = self.diffp[times[itime]]
                 label = np.hstack((label, self.diffq[times[itime]]))
                 label = label - noise
+                # label[:,0] = 0 * label[:,0] + 0.5
                 # label[inlet_node,1] = 0
                 # label[outlet_nodes,0] = 0
                 self.labels.append(label)
@@ -225,9 +250,10 @@ class AortaDataset(DGLDataset):
     def __len__(self):
         return len(self.graphs)
 
-dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree)
 
 #%%
+
+dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree)
 
 num_examples = len(dataset)
 num_train = int(num_examples * 0.8)
@@ -245,64 +271,99 @@ from dgl.nn import ChebConv
 from dgl.nn import GraphConv
 from dgl.nn import GATConv
 from dgl.nn import RelGraphConv
+from torch.nn import LayerNorm
 from torch.nn import Linear
 import torch.nn.functional as F
 import dgllife
 import dgl.function as fn
 
-# class GCN(Module):
-#     def __init__(self, in_feats, h_feats):
-#         super(GCN, self).__init__()
-#         # lm = dgl.laplacian_lambda_max(g)
-#         # self.conv1 = ChebConv(in_feats, h_feats, 3, bias = False)
-#         # self.conv1 = GATConv(h_feats, h_feats, num_heads = 1, feat_drop = 0.1)
-#         self.num_heads = 2
-#         self.conv1 = GATConv(in_feats, h_feats, num_heads = self.num_heads, feat_drop = 0.5)
-#         self.conv2 = GATConv(h_feats, 2, num_heads = 1, feat_drop = 0.5)
-#         # self.conv3 = GraphConv(h_feats, 2)
-#         self.double()
-#         self.lms = {}
+class GCN(Module):
+    def __init__(self, in_feats, h_feats):
+        super(GCN, self).__init__()
+        # lm = dgl.laplacian_lambda_max(g)
+        # self.conv1 = ChebConv(in_feats, h_feats, 3, bias = False)
+        # self.conv1 = GATConv(h_feats, h_feats, num_heads = 1, feat_drop = 0.1)
+        self.num_heads = 2
+        self.conv1 = GATConv(in_feats, h_feats, num_heads = self.num_heads, feat_drop = 0.5)
+        self.conv2 = GATConv(h_feats, 2, num_heads = 1, feat_drop = 0.5)
+        # self.conv3 = GraphConv(h_feats, 2)
+        self.double()
+        self.lms = {}
 
-#     def forward(self, g, in_feat):
-#         if g.num_nodes() not in self.lms:
-#             self.lms[g.num_nodes()] = dgl.laplacian_lambda_max(g)
-#         # h = self.conv1(g, in_feat, lambda_max = self.lms[g.num_nodes()])
-#         h = self.conv1(g, in_feat)
-#         h = torch.sum(h, dim = 1)
-#         h = h / self.num_heads
-#         h = F.relu(h)
-#         h = self.conv2(g, h)
-#         # h = F.relu(h)
-#         # h = self.conv3(g, h)
-#         # g.ndata['h'] = h
-#         return h
+    def forward(self, g, in_feat):
+        if g.num_nodes() not in self.lms:
+            self.lms[g.num_nodes()] = dgl.laplacian_lambda_max(g)
+        # h = self.conv1(g, in_feat, lambda_max = self.lms[g.num_nodes()])
+        h = self.conv1(g, in_feat)
+        h = torch.sum(h, dim = 1)
+        h = h / self.num_heads
+        h = F.relu(h)
+        h = self.conv2(g, h)
+        # h = F.relu(h)
+        # h = self.conv3(g, h)
+        # g.ndata['h'] = h
+        return h
+
+class MLP(Module):
+    def __init__(self, in_feats, latent, n_h_layers, normalize = True):
+        super().__init__()
+        self.encoder_in = Linear(in_feats, latent).double()
+        self.encoder_out = Linear(latent, latent).double()
+        
+        self.n_h_layers = n_h_layers
+        self.hidden_layers = []
+        for i in range(n_h_layers):
+            self.hidden_layers.append(Linear(latent, latent).double())
+        
+        self.normalize = normalize
+        if self.normalize:
+            self.norm = LayerNorm(latent).double()
+            
+    def forward(self, inp):
+        enc_features = self.encoder_in(inp)
+        enc_features = F.relu(enc_features)
+        
+        for i in range(self.n_h_layers):
+            enc_features = self.hidden_layers[i](enc_features)
+            enc_features = F.relu(enc_features)
+            
+        enc_features = self.encoder_out(enc_features)
+        
+        if self.normalize:
+            enc_features = self.norm(enc_features)
+        
+        return enc_features
         
 
 class GraphNet(Module):
-    def __init__(self, in_feats_nodes, in_feats_edges, latent, h_feats, L, inlet_node, outlet_nodes):
+    def __init__(self, in_feats_nodes, in_feats_edges, latent, h_feats, L, hidden_layers):
         super(GraphNet, self).__init__()
-        self.encoder_nodes = Linear(in_feats_nodes, latent).double()
-        self.encoder_edges = Linear(in_feats_edges, latent).double()
+        
+        normalize_inner = True
+        
+        self.encoder_nodes = MLP(in_feats_nodes, latent, hidden_layers, normalize_inner)
+        self.encoder_edges = MLP(in_feats_edges, latent, hidden_layers, normalize_inner)
+
         self.processor_edges = []
         self.processor_nodes = []
         for i in range(L):      
-            self.processor_edges.append(Linear(latent * 3, latent).double())
-            self.processor_nodes.append(Linear(latent * 2, latent).double())
+            self.processor_edges.append(MLP(latent * 3, latent, hidden_layers, normalize_inner))
+            self.processor_nodes.append(MLP(latent * 2, latent, hidden_layers, normalize_inner))
+
         self.L = L
-        self.output = Linear(latent, h_feats).double()
+
+        self.output = MLP(latent, h_feats, hidden_layers, False)
         self.inlet_node = inlet_node
         self.outlet_nodes = outlet_nodes
         
     def encode_nodes(self, nodes):
         f = nodes.data['features_c']
         enc_features = self.encoder_nodes(f)
-        enc_features = F.relu(enc_features)
         return {'proc_node': enc_features}
     
     def encode_edges(self, edges):
         f = edges.data['dist']
         enc_features = self.encoder_edges(f)
-        enc_features = F.relu(enc_features)
         return {'proc_edge': enc_features}
     
     def process_edges(self, edges, layer):
@@ -310,7 +371,6 @@ class GraphNet(Module):
         f2 = edges.src['proc_node']
         f3 = edges.dst['proc_node']
         proc_edge = self.processor_edges[layer](torch.cat((f1, f2, f3),dim=1))
-        proc_edge = F.relu(proc_edge)
         # add residual connection
         proc_edge = proc_edge + f1
         return {'proc_edge' : proc_edge}
@@ -319,7 +379,6 @@ class GraphNet(Module):
         f1 = nodes.data['proc_node']
         f2 = nodes.data['pe_sum']
         proc_node = self.processor_nodes[layer](torch.cat((f1, f2),dim=1))
-        proc_node = F.relu(proc_node)
         # add residual connection
         proc_node = proc_node + f1
         return {'proc_node' : proc_node}
@@ -343,50 +402,65 @@ class GraphNet(Module):
             g.update_all(fn.copy_e('proc_edge', 'm'), fn.sum('m', 'pe_sum'))
             g.apply_nodes(pn)
         g.apply_nodes(self.decode)
-        
         # # averaging?
         # for i in range(5):
         #     g.update_all(fn.copy_u('h', 'm'), fn.mean('m', 'h'))
         
-        g.ndata['h'][self.inlet_node,1] = 0
-        g.ndata['h'][self.outlet_nodes,0] = 0
+        # g.ndata['h'][self.inlet_node,1] = 0
+        # g.ndata['h'][self.outlet_nodes,0] = 0
         return g.ndata['h']
     
 def weighted_mse_loss(input, target, weight):
     return (weight * (input - target) ** 2).mean()
 
 # Create the model with given dimensions
-latent = 16
+latent = 32
 infeat_nodes = 4
 infeat_edges = 4
-model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 10, inlet_node, outlet_nodes)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.001)
+# model = GCN(infeat_nodes, latent)
+model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 1, 2)
+optimizer = torch.optim.Adam(model.parameters(), lr = 0.001) # lr=0.01, weight_decay=0.0001)
 nepochs = 1000
 for epoch in range(nepochs):
     print('ep = ' + str(epoch))
+    global_loss = 0
+    count = 0
     for batched_graph, labels in train_dataloader:
-        pred = model(batched_graph, batched_graph.ndata['features'].double())
+        pred = model(batched_graph, batched_graph.ndata['features'].double()).squeeze()
         # loss = F.mse_loss(pred, torch.reshape(labels, pred.shape))
         weight = torch.ones(pred.shape) 
-        weight[inlet_node,0] = 10
-        weight[outlet_nodes,1] = 10
-        weight[inlet_node,1] = 0
-        weight[outlet_nodes,0] = 0
+        # weight[inlet_node,0] = 10
+        # weight[outlet_nodes,1] = 10
+        # weight[inlet_node,1] = 0
+        # weight[outlet_nodes,0] = 0
+        # weight[:,1] = 0
         loss = weighted_mse_loss(pred, torch.reshape(labels, pred.shape), weight)
+        global_loss = global_loss + loss.detach().numpy()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        count = count + 1
+    if count % 100 == 0:
+        fig1 = plt.figure()
+        ax1 = plt.axes() 
+        idx = 0
+        ax1.plot(pred[:,idx].detach().numpy(),'-r')
+        ax1.plot(torch.reshape(labels, pred.shape).detach().numpy()[:,idx],'-b')
+        # ax1.set_ylim(np.min(torch.reshape(labels, pred.shape).detach().numpy()[:,idx]),
+        #              np.max(torch.reshape(labels, pred.shape).detach().numpy()[:,idx]))
+        ax1.set_title('loss p' + str(batched_graph.ndata['time'][0].numpy()))
         
-    fig1 = plt.figure()
-    ax1 = plt.axes() 
-    ax1.plot(pred[:,0].detach().numpy(),'-r')
-    ax1.plot(torch.reshape(labels, pred.shape).detach().numpy()[:,0],'-b')
-    ax1.set_ylim(np.min(torch.reshape(labels, pred.shape).detach().numpy()[:,0]),
-                 np.max(torch.reshape(labels, pred.shape).detach().numpy()[:,0]))
-    ax1.set_title(str(batched_graph.ndata['time'][0].numpy()))
-    plt.show()
-        
-    print('\tloss = ' + str(loss.detach().numpy()))
+        fig2 = plt.figure()
+        ax2 = plt.axes()
+        idx = 1
+        ax2.plot(pred[:,idx].detach().numpy(),'-r')
+        ax2.plot(torch.reshape(labels, pred.shape).detach().numpy()[:,idx],'-b')
+        # ax2.set_ylim(np.min(torch.reshape(labels, pred.shape).detach().numpy()[:,idx]),
+        #              np.max(torch.reshape(labels, pred.shape).detach().numpy()[:,idx]))
+        ax2.set_title('loss q' + str(batched_graph.ndata['time'][0].numpy()))
+        plt.show()
+            
+    print('\tloss = ' + str(global_loss / count))
 
 #%%
 
@@ -502,7 +576,7 @@ graph = dgl.unbatch(batched_graph)[0]
 timeg = float(graph.ndata['time'][0])
 nodes_degree = np.expand_dims(graph.ndata['features'][:,-1],1)
     
-tin = 20
+tin = 40
 count = 0
 gp = gpressures[times[tin]]
 gq = gvelocities[times[tin]]

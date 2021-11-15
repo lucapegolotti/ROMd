@@ -2,11 +2,14 @@ import numpy as np
 import scipy
 from scipy import interpolate
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 
 class ResampledGeometry:
-    def __init__(self, geometry, coeff):
+    def __init__(self, geometry, coeff, remove_caps = False):
         self.geometry = geometry
         self.resample(coeff)
+        if remove_caps:
+            self.remove_caps()
         self.construct_interpolation_matrices()
 
     def assign_area(self, area):
@@ -150,7 +153,7 @@ class ResampledGeometry:
 
     def compare_field_along_centerlines(self, field):
         nportions = len(self.p_portions)
-        
+
         for ipor in range(0, nportions):
             # plot original one
             fig = plt.figure(ipor)
@@ -195,8 +198,8 @@ class ResampledGeometry:
         ax = plt.axes()
         ax.plot(xsf, gf, 'k--')
         ax.plot(xsp, gp, 'r-')
-        
-        
+
+
 
     def generate_nodes(self):
         nodes = np.zeros((0,3))
@@ -210,7 +213,7 @@ class ResampledGeometry:
         for ijun in range(0, njuns):
             inlets.append(np.where(self.geometry.connectivity[ijun,:] == -1)[0][0])
             outlets.append(np.where(self.geometry.connectivity[ijun,:] == 1)[0])
-            
+
         outletp = outlets
 
         offsets = [0]
@@ -244,7 +247,7 @@ class ResampledGeometry:
                 outlet = outlets[ioutlet]
                 edges = np.vstack((edges, np.array((offsets[inlet] + nnpoints[inlet] - 1,
                                                    offsets[outlet]))))
-                
+
         lengths = []
         for edge in edges:
             lengths.append(np.linalg.norm(nodes[int(edge[1]),:]-nodes[int(edge[0]),:]))
@@ -252,26 +255,26 @@ class ResampledGeometry:
         self.offsets = offsets
         self.npoints = nnpoints
         self.isoutlets = isoutlets
-        
+
         nportions = len(self.p_portions)
-        
+
         inlet_node = 0
         outlet_nodes = []
         for i in range(0,nportions):
             if i not in inlets:
                 outlet_nodes.append(self.offsets[i] + self.npoints[i] - 1)
-            
+
             isinlet = True
             for outlet in outletp:
                 if i in outlet:
                     isinlet = False
-                    
+
             if isinlet:
                 inlet_node = self.offsets[i]
-        
+
         return nodes.astype(np.float64), edges, lengths, inlet_node, outlet_nodes
 
-    def generate_fields(self, pressures, velocities, areas):
+    def generate_fields(self, pressures, velocities, areas, times):
         g_pressures = {}
         g_velocities = {}
 
@@ -281,6 +284,9 @@ class ResampledGeometry:
             for ipor in range(0, len(self.p_portions)):
                 f = self.compute_proj_field(ipor, field)
 
+                # print(f.size)
+                # f = savgol_filter(f, 11, 3)
+
                 if self.isoutlets[ipor]:
                     newfield = np.vstack((newfield, np.expand_dims(f[1:], axis = 1)))
                 else:
@@ -289,7 +295,24 @@ class ResampledGeometry:
             return newfield.astype(np.float64)
 
         for t in pressures:
-            g_pressures[t] = compute_g_field(pressures[t])
-            g_velocities[t] = compute_g_field(velocities[t])
+            if t in times:
+                g_pressures[t] = compute_g_field(pressures[t])
+                g_velocities[t] = compute_g_field(velocities[t])
 
         return g_pressures, g_velocities, compute_g_field(areas)
+
+    def remove_caps(self):
+        connectivity = self.geometry.connectivity
+
+        outlets = []
+        for jpor in range(connectivity.shape[0]):
+            if np.sum(connectivity[:,jpor]) == -1:
+                inlet = jpor
+            if np.sum(connectivity[:,jpor]) == 1:
+                outlets.append(jpor)
+
+        for ipor in range(len(self.p_portions)):
+            if ipor == inlet:
+                self.p_portions[ipor] = self.p_portions[ipor][1:,:]
+            if jpor in outlets:
+                self.p_portions[ipor] = self.p_portions[ipor][:-1,:]

@@ -9,7 +9,7 @@ sys.path.append("core/")
 
 import matplotlib.pyplot as plt
 import io_utils as io
-import nn_utils as nn
+import nn_utils as nn 
 from geometry import Geometry
 from resampled_geometry import ResampledGeometry
 from data_container import DataContainer
@@ -23,13 +23,21 @@ from torch.utils.data.sampler import SubsetRandomSampler
 
 model = 'data/3d_flow_ini_1d_quad/0111_0001.vtp'
 model = 'data/3d_flow_repository(old)/0111_0001_recomputed.vtp'
-# model = 'data/output_no_sphere.vtp'
+model = 'data/output_sphere.vtp'
 soln = io.read_geo(model).GetOutput()
 soln_array, _, p_array = io.get_all_arrays(soln)
 
-pressures, velocities = io.gather_pressures_velocities(soln_array)
+pressures, velocities = io.gather_pressures_velocities(soln_array)    
+
 geometry = Geometry(p_array)
-rgeo = ResampledGeometry(geometry, 20)
+
+# for t in velocities:
+#     velocities[t] = velocities[t] * soln_array['area']
+    
+for t in pressures:
+    pressures[t] = pressures[t] / 1333.2
+
+rgeo = ResampledGeometry(geometry, 10, remove_caps = True)
 
 #%%
 
@@ -38,7 +46,63 @@ nodes, edges, lengths, inlet_node, outlet_nodes = rgeo.generate_nodes()
 times = [t for t in pressures]
 times.sort()
 times = times[10:]
-gpressures, gvelocities, areas = rgeo.generate_fields(pressures, velocities, soln_array['area'])
+gpressures, gvelocities, areas = rgeo.generate_fields(pressures, velocities, soln_array['area'], times)
+
+#%%
+# plot pressures 
+
+it = iter(train_dataloader)
+    
+tin = 0
+count = 0
+gp = gpressures[times[tin]]
+gq = gvelocities[times[tin]]
+for it in range(tin, len(times)-1):
+    t = times[it]
+   
+    truep = gpressures[t]
+    fig1 = plt.figure()
+    ax1 = plt.axes() 
+    ax1.plot(gpressures[times[it + 1]] - truep,'-b')
+    ax1.set_title('pressure t = ' + str(t))
+    plt.show()
+
+
+#%% let's add noise using random walk as in https://arxiv.org/pdf/2002.09405.pdf
+
+random_walks = 4
+r_gpressures = []
+r_gvelocities = []
+
+for i in range(random_walks):
+    new_gpressures = {}
+    new_gvelocities = {}
+    
+    nP = gpressures[times[0]].shape[0]
+    nQ = gvelocities[times[0]].shape[0]
+    rate_noise = 0.00005
+    noise_p = np.zeros((nP, 1))
+    noise_q = np.zeros((nQ, 1))
+    for itime in range(0,len(times)):
+        gp = gpressures[times[itime]]
+        noisep = noise_p + np.random.normal(0, rate_noise, (nP, 1)) * gp
+        
+        new_gpressures[times[itime]] = gpressures[times[itime]] + noisep
+        
+        gq = gvelocities[times[itime]]
+        noiseq = noise_q + np.random.normal(0, rate_noise, (nQ, 1)) * gq
+        
+        new_gvelocities[times[itime]] = gvelocities[times[itime]] + noiseq
+        
+    r_gpressures.append(new_gpressures)
+    r_gvelocities.append(new_gvelocities)
+    
+fig1 = plt.figure()
+ax1 = plt.axes() 
+ax1.plot(gpressures[times[itime]], '-r')
+ax1.plot(new_gpressures[times[itime]],'--b')    
+
+#%% compute diffs
 
 def compute_seq_diff(fields, times):
     diffs = {}
@@ -47,6 +111,18 @@ def compute_seq_diff(fields, times):
         diffs[times[itime]] = (fields[times[itime+1]] - fields[times[itime]])
         
     return diffs
+
+diffp = compute_seq_diff(gpressures, times)
+diffq = compute_seq_diff(gvelocities, times)
+
+r_diffp = []
+r_diffq = []
+for i in range(random_walks):
+    r_diffp.append(compute_seq_diff(r_gpressures[i], times))
+    r_diffq.append(compute_seq_diff(r_gvelocities[i], times))
+
+
+#%%
 
 def normalize(field):
     m = np.min(field)
@@ -88,26 +164,46 @@ def standardize_sequence(fields):
 _normalize = False
 
 if _normalize:
-    diffp = compute_seq_diff(gpressures, times)
     diffp, mdp, Mdp = normalize_sequence(diffp)
-    
-    diffq = compute_seq_diff(gvelocities, times)
     diffq, mdq, Mdq = normalize_sequence(diffq)
     
     gpressures, mp, Mp = normalize_sequence(gpressures)
     gvelocities, mq, Mq = normalize_sequence(gvelocities)
     areas, ma, stda = normalize(areas)
     
-else:
-    diffp = compute_seq_diff(gpressures, times)
-    diffp, mdp, stdvdp = standardize_sequence(diffp)
+    for i in range(random_walks):
+        r_diffp.append(compute_seq_diff(r_gpressures[i], times))
+        r_diffq.append(compute_seq_diff(r_gvelocities[i], times))
+        
+        
+        for t in r_gpressures[i]:
+            if t != times[-1]:
+                r_diffp[i][t] = (r_diffp[i][t] - mdp) / (Mdp - mdp)
+                r_diffq[i][t] = (r_diffq[i][t] - mdq) / (Mdq - mdq)
+            r_gpressures[i][t] = (r_gpressures[i][t] - mp) / (Mp - mp)
+            r_gvelocities[i][t] = (r_gvelocities[i][t] - mq) / (Mq - mq)
     
-    diffq = compute_seq_diff(gvelocities, times)
+    
+else:
+    
+    diffp, mdp, stdvdp = standardize_sequence(diffp)
     diffq, mdq, stdvdq = standardize_sequence(diffq)
     
     gpressures, mp, stdp = standardize_sequence(gpressures)
     gvelocities, mq, stdq = standardize_sequence(gvelocities)
     areas, ma, stda = standardize(areas)
+    
+    for i in range(random_walks):
+        r_diffp.append(compute_seq_diff(r_gpressures[i], times))
+        r_diffq.append(compute_seq_diff(r_gvelocities[i], times))
+        
+        
+        for t in r_gpressures[i]:
+            if t != times[-1]:
+                r_diffp[i][t] = (r_diffp[i][t] - mdp) / stdvdp
+                r_diffq[i][t] = (r_diffq[i][t] - mdq) / stdvdq
+            r_gpressures[i][t] = (r_gpressures[i][t] - mp) / stdp
+            r_gvelocities[i][t] = (r_gvelocities[i][t] - mq) / stdq
     
 
 g = dgl.graph((edges[:,0], edges[:,1]))
@@ -176,16 +272,20 @@ plt.show()
 #%%
 
 class AortaDataset(DGLDataset):
-    def __init__(self, nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree):
+    def __init__(self, nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree, r_gpressures, r_gvelocities, r_diffp, r_diffq):
         self.nodes = nodes
         self.edges = edges
         self.lengths = lengths
-        self.gpressures = gpressures
-        self.gvelocities = gvelocities
+        self.allpressures = [gpressures] 
+        self.allpressures = self.allpressures + r_gpressures
+        self.allvelocities = [gvelocities]
+        self.allvelocities = self.allvelocities + r_gvelocities
         self.areas = areas
         self.times = times
-        self.diffp = diffp
-        self.diffq = diffq
+        self.alldiffp = [diffp]
+        self.alldiffp = self.alldiffp + r_diffp
+        self.alldiffq = [diffq]
+        self.alldiffq = self.alldiffq + r_diffq
         self.edge_features = edge_features
         self.node_degree = node_degree
         super().__init__(name='aorta')
@@ -197,51 +297,29 @@ class AortaDataset(DGLDataset):
         ntrain = int(nnodes * 0.6)
         nval = int(nnodes * 0.2)
         
-        edge_features = []
-        node_degree = []
-        enrich = 3
-        rate_noise = 0.01
-        for itime in range(0, len(self.times) - 1):
-            
-            for i in range(enrich):
+        nrollouts = len(self.allpressures)
+        
+        for i in range(nrollouts):
+            edge_features = []
+            node_degree = []
+            for itime in range(0, len(self.times) - 1):
                 g = dgl.graph((self.edges[:,0], self.edges[:,1]))
-                # we add a self loop because we want the prediction in each node
-                # to depend on itself
                 g = dgl.to_bidirected(g)
                 # g = dgl.add_self_loop(g)
                         
-                features = np.hstack((gpressures[times[itime]], gvelocities[times[itime]]))
-                features[inlet_node,1] = gvelocities[times[itime + 1]][inlet_node].squeeze()
-                features[outlet_nodes,0] = gpressures[times[itime + 1]][outlet_nodes].squeeze()
-                noise = 0
+                features = np.hstack((self.allpressures[i][times[itime]], self.allvelocities[i][times[itime]]))
+                # features[inlet_node,1] = self.allvelocities[i][times[itime + 1]][inlet_node].squeeze()
+                # features[outlet_nodes,0] = self.allpressures[i][times[itime + 1]][outlet_nodes].squeeze()
+                # features = np.hstack((self.alldiffp[i][times[itime]], self.alldiffq[i][times[itime]]))
                 features = np.hstack((features, self.areas, self.node_degree))
-                # if i != 0:
-                noise = np.random.normal(0, rate_noise, (features.shape[0], 2)) * np.abs(features[:,:2])
-                # features[:,:2] = noise.astype(np.float64) + features[:,:2]
                 g.ndata['features'] = torch.from_numpy(features)
                 g.edata['dist'] = torch.from_numpy(self.edge_features)
-                label = self.diffp[times[itime]]
-                label = np.hstack((label, self.diffq[times[itime]]))
-                label = label - noise
-                # label[:,0] = 0 * label[:,0] + 0.5
-                # label[inlet_node,1] = 0
-                # label[outlet_nodes,0] = 0
+                label = self.alldiffp[i][times[itime]]
+                label = np.hstack((label, self.alldiffq[i][times[itime]]))
+                label = label
                 self.labels.append(label)
-                if (np.max(np.abs(label[:,0])) > 10):
-                    print('----')
-                    print(times[itime])
-                    print(np.max(np.abs(label[:,0])))
                 g.ndata['labels'] = torch.from_numpy(label)
                 g.ndata['time'] = torch.from_numpy(np.ones(features.shape[0]) * times[itime])
-                train_mask = torch.zeros(nnodes, dtype=torch.bool)
-                val_mask = torch.zeros(nnodes, dtype=torch.bool)
-                test_mask = torch.zeros(nnodes, dtype=torch.bool)
-                train_mask[:ntrain] = True
-                val_mask[ntrain:ntrain + nval] = True
-                test_mask[ntrain + nval:] = True
-                g.ndata['train_mask'] = train_mask
-                g.ndata['val_mask'] = val_mask
-                g.ndata['test_mask'] = test_mask
                 self.graphs.append(g)
 
     def __getitem__(self, i):
@@ -249,22 +327,30 @@ class AortaDataset(DGLDataset):
 
     def __len__(self):
         return len(self.graphs)
-
-
+    
 #%%
 
-dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree)
+fig1 = plt.figure()
+ax1 = plt.axes() 
+for t in diffp:
+    ax1.plot(diffp[t],c = 'black', alpha = 0.1)
+
+ax1.set_ylim([-3,3])
+plt.show()
+#%%
+
+dataset = AortaDataset(nodes, edges, lengths, gpressures, gvelocities, areas, times, diffp, diffq, edge_features, node_degree, r_gpressures, r_gvelocities, r_diffp, r_diffq)
 
 num_examples = len(dataset)
-num_train = int(num_examples * 0.8)
+num_train = int(num_examples * 1)
 
 train_sampler = SubsetRandomSampler(torch.arange(num_train))
 test_sampler = SubsetRandomSampler(torch.arange(num_train, num_examples))
 
 train_dataloader = GraphDataLoader(
-    dataset, sampler=train_sampler, batch_size=10, drop_last=False)
+    dataset, sampler=train_sampler, batch_size=1, drop_last=False)
 test_dataloader = GraphDataLoader(
-    dataset, sampler=test_sampler, batch_size=10, drop_last=False)
+    dataset, sampler=test_sampler, batch_size=1, drop_last=False)
 
 from torch.nn.modules.module import Module
 from dgl.nn import ChebConv
@@ -276,6 +362,7 @@ from torch.nn import Linear
 import torch.nn.functional as F
 import dgllife
 import dgl.function as fn
+import torch.optim as optim
 
 class GCN(Module):
     def __init__(self, in_feats, h_feats):
@@ -414,12 +501,14 @@ def weighted_mse_loss(input, target, weight):
     return (weight * (input - target) ** 2).mean()
 
 # Create the model with given dimensions
-latent = 32
+latent = 2
 infeat_nodes = 4
 infeat_edges = 4
 # model = GCN(infeat_nodes, latent)
-model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 1, 2)
-optimizer = torch.optim.Adam(model.parameters(), lr = 0.001) # lr=0.01, weight_decay=0.0001)
+# setting hidden_layers != 0 may make the network difficult to train
+model = GraphNet(infeat_nodes, infeat_edges, latent, 2, 0, hidden_layers = 0)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.9)
 nepochs = 1000
 for epoch in range(nepochs):
     print('ep = ' + str(epoch))
@@ -440,7 +529,7 @@ for epoch in range(nepochs):
         loss.backward()
         optimizer.step()
         count = count + 1
-    if count % 100 == 0:
+    if epoch % 1 == 0:
         fig1 = plt.figure()
         ax1 = plt.axes() 
         idx = 0
@@ -459,115 +548,11 @@ for epoch in range(nepochs):
         #              np.max(torch.reshape(labels, pred.shape).detach().numpy()[:,idx]))
         ax2.set_title('loss q' + str(batched_graph.ndata['time'][0].numpy()))
         plt.show()
+    scheduler.step()
             
     print('\tloss = ' + str(global_loss / count))
-
-#%%
-
-def find_solutions(model, graph, guess, prev, pnodes, qnodes, bcs_p, bcs_q):
-
-    def residual(x):
-        pred = model(graph, x)
-        # res = pred + prev[:,0:2] - x[:,0:2]
-        res = pred - x[:,0:2]
-        res = torch.hstack((res, torch.zeros(x.shape[0], x.shape[1] - 2)))
-        res[pnodes,0] = 0
-        res[qnodes,1] = 0
-        return res
-    
-    def jac(x):
-        J = torch.autograd.functional.jacobian(residual, x)
-        J[pnodes,0,:,0] = 0
-        J[pnodes,0,:,1] = 0
-        J[pnodes,0,pnodes,0] = 1
-        J[qnodes,1,:,0] = 0
-        J[qnodes,1,:,1] = 0
-        J[qnodes,1,qnodes,1] = 1
-        return J
         
-    N = 10
-    tol = 1e-4
-    x = guess
-    x[pnodes,0] = bcs_p
-    x[qnodes,1] = bcs_q
-    res = residual(x)
-    inerr = torch.norm(res)
-    err = inerr
-    count = 0
-    while err / inerr > tol:
-        print('it = ' + str(count) + ' rel err = ' + str((err / inerr).detach().numpy()) + ' abs err = ' + str(err.detach().numpy()))
-        J = jac(x)
-        dx = torch.zeros(res.shape)
-        globalJ1 = torch.hstack((J[:,0,:,0], J[:,0,:,1]))
-        globalJ2 = torch.hstack((J[:,1,:,0], J[:,1,:,1]))
-        globalJ = torch.vstack((globalJ1, globalJ2))
-        # print(torch.linalg.cond(globalJ))
-        print(globalJ[:10,:10])
-        R = torch.hstack((res[:,0],res[:,1])) # torch.reshape(res[:,0:2], (res.shape[0] * 2, 1))
-        dx = torch.transpose(torch.reshape(torch.linalg.solve(globalJ, R), (2, res.shape[0])),0,1)
-        # dx = torch.vstack((dx[:res.shape[0]],dx[res.shape[0]:]))
-        
-        # in principle it should be like this but the jacobians of the cross
-        # terms are singular
-        # for i in range(0,2):
-        #     for j in range(0,2):
-        #         print(torch.linalg.cond(J[:,i,:,j]))
-        #         dx[:,i] = dx[:,i] + torch.linalg.solve(J[:,i,:,j], res[:,j])
-        # dx = torch.zeros(res[:,0:2].shape)
-        # for i in range(0,2):
-        #     dx[:,i] = dx[:,i] + torch.linalg.solve(J[:,i,:,i], res[:,i])
-        x[:,0:2] = x[:,0:2] - dx
-        res = residual(x)
-        err = torch.norm(res)
-        count = count + 1
-    print('done ' + str(count) + ' rel err = ' + str((err / inerr).detach().numpy()) + ' abs err = ' + str(err.detach().numpy()))
-    return x
-        
-#%%
-
-
-# it = iter(train_dataloader)
-# batch = next(it)
-# batched_graph, labels = batch
-# graph = dgl.unbatch(batched_graph)[0]
-# count = 0
-# for it in range(0, len(times) - 1):
-#     t = times[it]
-#     gp = gpressures[t]
-#     gq = gvelocities[t]
-#     features = torch.from_numpy(np.hstack((gp,gq,areas, nodes)))
-    
-    
-#     pred = find_solutions(model, gp,)
-#     pred = model(graph,features)
-    
-#     fig1 = plt.figure()
-#     ax1 = plt.axes()
-#     deltap = mdp + pred[:,0].detach().numpy() * (Mdp - mdp)
-#     predp = deltap + mp + gpressures[t].squeeze() * (Mp - mp)
-#     truep =  mp + gpressures[t] * (Mp - mp)
-#     ax1.plot(predp / 1333.2,'r')
-#     ax1.plot(truep / 1333.2,'--b')
-#     ax1.set_title('pressure t = ' + str(t))
-#     ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
-#     ax1.set_xlim((0, nodes.shape[0]))
-#     plt.savefig('pressure/t' + str(count).rjust(3, '0'))
-
-    
-#     fig2 = plt.figure()
-#     ax2 = plt.axes()
-#     deltaq = mdq + pred[:,1].detach().numpy() * (Mdq - mdq)
-#     predq = deltaq + mq + gvelocities[t].squeeze() * (Mq - mq)
-#     trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
-#     ax2.plot(predq,'r')
-#     ax2.plot(trueq,'--b')
-#     ax2.set_title('flowrate t = ' + str(t))
-#     ax2.set_ylim((mq,Mq))
-#     ax2.set_xlim((0, nodes.shape[0]))
-#     plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
-#     count = count + 1
-    
-#%% when we predict delta
+#%% when we predict delta 
 
 it = iter(train_dataloader)
 batch = next(it)
@@ -576,7 +561,7 @@ graph = dgl.unbatch(batched_graph)[0]
 timeg = float(graph.ndata['time'][0])
 nodes_degree = np.expand_dims(graph.ndata['features'][:,-1],1)
     
-tin = 40
+tin = 240
 count = 0
 gp = gpressures[times[tin]]
 gq = gvelocities[times[tin]]
@@ -596,34 +581,65 @@ for it in range(tin, len(times)-1):
     prev[inlet_node,1] = torch.from_numpy(tq[inlet_node].squeeze())
     prev[outlet_nodes,0] = torch.from_numpy(tp[outlet_nodes].squeeze())
 
-    # prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, nodes_degree)))
-    pred = model(graph, prev)
-    # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
-    pred = pred.squeeze()
-    deltap = mdp + pred[:,0].detach().numpy() * (stdvdp)
-    predp = deltap + mp + prev[:,0].numpy() * (stdp)
-    truep = mp + gpressures[nt] * stdp
-    fig1 = plt.figure()
-    ax1 = plt.axes() 
-    ax1.plot(predp / 1333.2,'r')
-    ax1.plot(truep / 1333.2,'-b')
-    ax1.set_title('pressure t = ' + str(t))
-    # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
-    ax1.set_xlim((0, nodes.shape[0]))
-    plt.savefig('pressure/t' + str(count).rjust(3, '0'))
+    if _normalize:
+        # prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, nodes_degree)))
+        pred = model(graph, prev)
+        # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
+        pred = pred.squeeze()
+        deltap = mp + pred[:,0].detach().numpy() * (Mp - mp)
+        predp = deltap + mp + prev[:,0].numpy() * (Mp - mp)
+        truep = mp + gpressures[nt] * (Mp - mp)
+        fig1 = plt.figure()
+        ax1 = plt.axes() 
+        ax1.plot(predp / 1333.2,'r')
+        ax1.plot(truep / 1333.2,'-b')
+        ax1.set_title('pressure t = ' + str(t))
+        # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
+        ax1.set_xlim((0, nodes.shape[0]))
+        plt.savefig('pressure/t' + str(count).rjust(3, '0'))
+    
+        deltaq = mq + pred[:,1].detach().numpy() * (Mq - mq)
+        predq = deltaq + mq + prev[:,1].numpy() * (Mq - mq)
+        trueq = mq + gvelocities[nt] * (Mq - mq)
+        fig2 = plt.figure()
+        ax2 = plt.axes()
+        ax2.plot(predq,'r')
+        ax2.plot(trueq,'--b')
+        ax2.set_title('velocity t = ' + str(t))
+        # ax2.set_ylim((mq,Mq))
+        ax2.set_xlim((0, nodes.shape[0]))
+        plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
+        plt.show()
+    else:
+        # prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, nodes_degree)))
+        pred = model(graph, prev)
+        # pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
+        pred = pred.squeeze()
+        deltap = mdp + pred[:,0].detach().numpy() * (stdvdp)
+        predp = deltap + mp + prev[:,0].numpy() * (stdp)
+        truep = mp + gpressures[nt] * stdp
+        fig1 = plt.figure()
+        ax1 = plt.axes() 
+        ax1.plot(predp / 1333.2,'r')
+        ax1.plot(truep / 1333.2,'-b')
+        ax1.set_title('pressure t = ' + str(t))
+        # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
+        ax1.set_xlim((0, nodes.shape[0]))
+        plt.savefig('pressure/t' + str(count).rjust(3, '0'))
+    
+        deltaq = mdq + pred[:,1].detach().numpy() * (stdvdq)
+        predq = deltaq + mq + prev[:,1].numpy() * stdq
+        trueq = mq + gvelocities[nt] * stdq
+        fig2 = plt.figure()
+        ax2 = plt.axes()
+        ax2.plot(predq,'r')
+        ax2.plot(trueq,'--b')
+        ax2.set_title('flowrate t = ' + str(t))
+        # ax2.set_ylim((mq,Mq))
+        ax2.set_xlim((0, nodes.shape[0]))
+        plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
+        plt.show()
 
-    deltaq = mdq + pred[:,1].detach().numpy() * (stdvdq)
-    predq = deltaq + mq + prev[:,1].numpy() * stdq
-    trueq = mq + gvelocities[nt] * stdq
-    fig2 = plt.figure()
-    ax2 = plt.axes()
-    ax2.plot(predq,'r')
-    ax2.plot(trueq,'--b')
-    ax2.set_title('velocity t = ' + str(t))
-    # ax2.set_ylim((mq,Mq))
-    ax2.set_xlim((0, nodes.shape[0]))
-    plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
-    plt.show()
     # if it < 13:
     gp = gpressures[times[it+1]]
     gq = gvelocities[times[it+1]]
@@ -633,66 +649,3 @@ for it in range(tin, len(times)-1):
     gp = np.expand_dims((predp - mp),1) / stdp
     gq = np.expand_dims((predq - mq),1) / stdq
     count = count + 1
-
-#%% when we predict the function
-
-it = iter(train_dataloader)
-batch = next(it)
-batched_graph, labels = batch
-graph = dgl.unbatch(batched_graph)[0]
-    
-tin = 2
-gp = gpressures[times[tin]]
-gq = gvelocities[times[tin]]
-count = 0
-for it in range(tin, len(times)-1):
-    tp = gpressures[times[it + 1]]
-    tq = gvelocities[times[it + 1]]
-    t = times[it]
-    prev = torch.from_numpy(np.hstack((gp, gq, gp, gq, areas, nodes)))
-    # prev = torch.from_numpy(np.hstack((gpressures[times[it + 1]], gvelocities[times[it + 1]], gp, gq, areas, nodes)))
-    
-    bcs_p = torch.Tensor(np.squeeze(tp[outlet_nodes]).astype(np.float64))
-    bcs_q = torch.Tensor(np.squeeze(tq[inlet_node]).astype(np.float64))
-    
-    bcsp = gp * 0
-    bcsp[outlet_nodes] = tp[outlet_nodes]
-    bcsq = gq * 0
-    bcsq[inlet_node] = tq[inlet_node]
-    prev = torch.from_numpy(np.hstack((tp, tq, gp, gq, areas, node_degree)))
-    # pred = model(graph, prev)
-    pred = find_solutions(model, graph, prev, prev, outlet_nodes, inlet_node, bcs_p, bcs_q)
-
-    predp = mp + pred[:,0].detach().numpy() * (Mp - mp)
-    truep =  mp + gpressures[times[it + 1]] * (Mp - mp)
-    fig1 = plt.figure()
-    ax1 = plt.axes()
-    ax1.plot(predp / 1333.2,'r')
-    ax1.plot(truep / 1333.2,'--b')
-    ax1.set_title('pressure t = ' + str(t))
-    # ax1.set_ylim((mp / 1333.2,Mp / 1333.2))
-    ax1.set_xlim((0, nodes.shape[0]))
-    plt.savefig('pressure/t' + str(count).rjust(3, '0'))
-
-    predq = mq + pred[:,1].detach().numpy() * (Mq - mq)
-    trueq = mq + gvelocities[times[it + 1]] * (Mq - mq)
-    fig2 = plt.figure()
-    ax2 = plt.axes()
-    ax2.plot(predq,'r')
-    ax2.plot(trueq,'--b')
-    ax2.set_title('velocity t = ' + str(t))
-    # ax2.set_ylim((mq,Mq))
-    ax2.set_xlim((0, nodes.shape[0]))
-    plt.savefig('flowrate/t' + str(count).rjust(3, '0'))
-
-    plt.show()
-
-    # if it < 13:
-    gp = gpressures[times[it+1]]
-    gq = gvelocities[times[it+1]]
-    # else:
-    # gp = np.expand_dims((predp - mp) / (Mp - mp),1)
-    # gq = np.expand_dims((predq - mq) / (Mq - mq),1)
-    print(gp.shape)
-    count = count + 1
-
